@@ -7,14 +7,12 @@ from typing import Callable, List
 _log = logging.getLogger("mcko.input_field")
 
 BG_COLOR = "#272727"
-FG_COLOR = "#c8c8c8"
-INSERT_COLOR = "#c8c8c8"
+FG_COLOR = "#b8b8b8"
+INSERT_COLOR = "#b8b8b8"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 12
 MAX_INPUT_LINES = 2
 MIN_INPUT_LINES = 1
-PLACEHOLDER = "Напиши задачу или вставь фото"
-PLACEHOLDER_COLOR = "#5f6368"
 
 
 class InputField(tk.Text):
@@ -46,7 +44,6 @@ class InputField(tk.Text):
         self._on_submit = on_submit
         self._images: dict = {}  # "pic1" → raw image bytes (PNG)
         self._pic_counter = 0
-        self._placeholder_visible = False
 
         # Bindings
         self.bind("<Return>", self._on_enter)
@@ -58,8 +55,6 @@ class InputField(tk.Text):
         self.bind("<Key>", self._on_key)
         self.bind("<BackSpace>", self._on_backspace)
         self.bind("<Delete>", self._on_delete)
-        self.bind("<FocusIn>", self._on_focus_in)
-        self.bind("<FocusOut>", self._on_focus_out)
 
         # Tag for image labels (visual style)
         self.tag_configure(
@@ -69,7 +64,7 @@ class InputField(tk.Text):
             font=(FONT_FAMILY, FONT_SIZE, "bold"),
         )
 
-        self._show_placeholder()
+        self.configure(height=MIN_INPUT_LINES)
         _log.info("InputField initialized")
 
     # ─── Public ──────────────────────────────────────────────────────────────
@@ -77,8 +72,6 @@ class InputField(tk.Text):
     def get_content(self) -> List[dict]:
         """Build a list of API content blocks from current field content."""
         _log.info("Building content blocks from input field")
-        if self._placeholder_visible:
-            return []
         blocks = []
         text_buf = ""
 
@@ -134,7 +127,7 @@ class InputField(tk.Text):
         """Clear input field and all stored images."""
         self.delete("1.0", tk.END)
         self._images.clear()
-        self._show_placeholder()
+        self.configure(height=MIN_INPUT_LINES)
         _log.info("InputField cleared")
 
     def focus(self) -> None:
@@ -156,7 +149,6 @@ class InputField(tk.Text):
 
     def _on_shift_enter(self, event) -> str:
         """Insert newline on Shift+Enter."""
-        self._clear_placeholder_if_needed()
         self.insert(tk.INSERT, "\n")
         self._sync_height()
         return "break"
@@ -169,7 +161,6 @@ class InputField(tk.Text):
             if clip_type == "image":
                 img_bytes = cb.read_image()
                 if img_bytes:
-                    self._clear_placeholder_if_needed()
                     self._insert_image_label(img_bytes)
                     return "break"
         except Exception as exc:
@@ -181,7 +172,6 @@ class InputField(tk.Text):
         """If keypress lands on an image label, delete the label atomically."""
         if event.keysym in ("BackSpace", "Delete", "Return", "Tab"):
             return None
-        self._clear_placeholder_if_needed()
         if self._is_cursor_in_image_label():
             self._delete_label_at_cursor()
             return "break"
@@ -213,17 +203,9 @@ class InputField(tk.Text):
         self.clear()
         return "break"
 
-    def _on_focus_in(self, event) -> None:
-        self._clear_placeholder_if_needed()
-
-    def _on_focus_out(self, event) -> None:
-        if not self._has_real_content():
-            self._show_placeholder()
-
     # ─── Image label management ───────────────────────────────────────────────
 
     def _insert_image_label(self, img_bytes: bytes) -> None:
-        self._clear_placeholder_if_needed()
         self._pic_counter += 1
         key = f"pic{self._pic_counter}"
         label_text = f"[added {key}]"
@@ -261,39 +243,10 @@ class InputField(tk.Text):
             self.delete(str(ranges[0]), str(ranges[1]))
             self.tag_delete(pic_key)
         self._images.pop(pic_key, None)
-        if not self._has_real_content():
-            self._show_placeholder()
-        else:
-            self._sync_height()
+        self._sync_height()
         _log.info("Image label deleted: %s", pic_key)
 
-    def _show_placeholder(self) -> None:
-        self.delete("1.0", tk.END)
-        self.insert("1.0", PLACEHOLDER)
-        self.configure(fg=PLACEHOLDER_COLOR)
-        self.mark_set(tk.INSERT, "1.0")
-        self._placeholder_visible = True
-        self.configure(height=MIN_INPUT_LINES)
-
-    def _clear_placeholder_if_needed(self) -> None:
-        if not self._placeholder_visible:
-            return
-        self.delete("1.0", tk.END)
-        self.configure(fg=FG_COLOR)
-        self._placeholder_visible = False
-
-    def _has_real_content(self) -> bool:
-        if self._images:
-            return True
-        if self._placeholder_visible:
-            return False
-        text = self.get("1.0", tk.END).strip()
-        return bool(text)
-
     def _sync_height(self) -> None:
-        if self._placeholder_visible:
-            self.configure(height=MIN_INPUT_LINES)
-            return
         line_count = int(self.index("end-1c").split(".")[0])
         target = max(MIN_INPUT_LINES, min(MAX_INPUT_LINES, line_count))
         self.configure(height=target)

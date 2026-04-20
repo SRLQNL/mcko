@@ -5,11 +5,11 @@ from tkinter import font as tkfont
 _log = logging.getLogger("mcko.chat_view")
 
 BG_COLOR = "#1e1e1e"
-USER_FG = "#8eb8d0"
-AI_FG = "#c8c8c8"
-LABEL_FG = "#6a8f60"
+USER_FG = "#7f9dad"
+AI_FG = "#b6b6b6"
+LABEL_FG = "#627b5c"
 FONT_FAMILY = "Courier"
-FONT_SIZE = 11
+FONT_SIZE = 10
 
 
 class ChatView(tk.Text):
@@ -26,8 +26,8 @@ class ChatView(tk.Text):
             selectbackground="#264f78",
             relief=tk.FLAT,
             bd=0,
-            padx=8,
-            pady=4,
+            padx=6,
+            pady=2,
             font=(FONT_FAMILY, FONT_SIZE),
             **kwargs,
         )
@@ -38,12 +38,12 @@ class ChatView(tk.Text):
         self.configure(yscrollcommand=scrollbar.set)
 
         # Tags
-        self.tag_configure("user_label", foreground="#6e95ab", font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#5f7f8f", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
         self.tag_configure("separator", foreground="#444444")
-        self.configure(spacing1=1, spacing3=2)
+        self.configure(spacing1=0, spacing3=1)
 
         _log.info("ChatView initialized")
 

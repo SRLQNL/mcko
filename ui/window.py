@@ -4,16 +4,16 @@ import tkinter as tk
 
 _log = logging.getLogger("mcko.window")
 
-WINDOW_WIDTH = 300
-WINDOW_HEIGHT = 150
-MIN_WINDOW_WIDTH = 260
-MIN_WINDOW_HEIGHT = 120
-BG_COLOR = "#1e1e1e"
-TITLEBAR_BG = "#232323"
-TITLEBAR_FG = "#6f6f6f"
-BORDER_COLOR = "#2f2f2f"
-CLOSE_BTN_FG = "#575757"
-CLOSE_BTN_HOVER = "#b85a5a"
+WINDOW_WIDTH = 264
+WINDOW_HEIGHT = 124
+MIN_WINDOW_WIDTH = 236
+MIN_WINDOW_HEIGHT = 98
+BG_COLOR = "#181818"
+TITLEBAR_BG = "#1d1d1d"
+TITLEBAR_FG = "#5f5f5f"
+BORDER_COLOR = "#272727"
+CLOSE_BTN_FG = "#4e4e4e"
+CLOSE_BTN_HOVER = "#9c5555"
 ALPHA = 1.0
 
 
@@ -77,7 +77,7 @@ class ChatWindow:
         win.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
         # ── Custom title bar ─────────────────────────────────────────────────
-        titlebar = tk.Frame(win, bg=TITLEBAR_BG, height=24)
+        titlebar = tk.Frame(win, bg=TITLEBAR_BG, height=18)
         titlebar.pack(fill=tk.X, side=tk.TOP)
         titlebar.pack_propagate(False)
 
@@ -102,7 +102,7 @@ class ChatWindow:
             text=" ↺ ",
             bg=TITLEBAR_BG,
             fg=CLOSE_BTN_FG,
-            font=("Courier", 12, "bold"),
+            font=("Courier", 10, "bold"),
             cursor="hand2",
         )
         restart_btn.pack(side=tk.RIGHT, fill=tk.Y)
@@ -120,23 +120,23 @@ class ChatWindow:
 
         # ── Input area (пакуется снизу первой — всегда видима) ───────────────
         input_frame = tk.Frame(win, bg=BG_COLOR)
-        input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 4))
+        input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=3, pady=(0, 3))
 
         self._input_field = InputField(input_frame, on_submit=self._handle_submit)
         self._input_field.pack(fill=tk.X, expand=True)
 
-        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=2)
+        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=3, pady=1)
 
         # ── Chat area (заполняет оставшееся пространство) ────────────────────
         chat_frame = tk.Frame(win, bg=BG_COLOR)
-        chat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=(4, 0))
+        chat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=3, pady=(2, 0))
 
         self._chat_view = ChatView(chat_frame)
         self._chat_view.pack(fill=tk.BOTH, expand=True)
 
         # ── Resize grip (правый нижний угол) ─────────────────────────────────
         grip = tk.Label(win, text="◢", bg=BG_COLOR, fg="#444444",
-                        font=("Courier", 8), cursor="sizing")
+                        font=("Courier", 7), cursor="sizing")
         grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
         grip.bind("<ButtonPress-1>", self._resize_start)
         grip.bind("<B1-Motion>", self._resize_motion)
