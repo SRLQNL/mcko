@@ -43,7 +43,7 @@ class ChatView(tk.Text):
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
         self.tag_configure("separator", foreground="#444444")
-        self.configure(spacing1=2, spacing3=4)
+        self.configure(spacing1=1, spacing3=2)
 
         _log.info("ChatView initialized")
 
@@ -62,7 +62,7 @@ class ChatView(tk.Text):
     def begin_assistant(self) -> None:
         """Start a new assistant response block (call before streaming chunks)."""
         _log.info("Beginning assistant response block")
-        self._write("\n< ", "ai_label")
+        self._write("< ", "ai_label")
 
     def append_assistant_chunk(self, chunk: str) -> None:
         """Append a streaming chunk to the current assistant response."""

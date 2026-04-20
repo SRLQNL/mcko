@@ -32,7 +32,6 @@ class ChatWindow:
         self._window: tk.Toplevel = None
         self._chat_view = None
         self._input_field = None
-        self._send_button = None
 
         # Drag state
         self._drag_x = 0
@@ -144,25 +143,8 @@ class ChatWindow:
         input_frame = tk.Frame(win, bg=BG_COLOR)
         input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 4))
 
-        send_btn = tk.Label(
-            input_frame,
-            text="→",
-            bg="#253342",
-            fg="#9cdcfe",
-            font=("Courier", 12, "bold"),
-            width=3,
-            cursor="hand2",
-            padx=0,
-            pady=4,
-        )
-        send_btn.pack(side=tk.RIGHT, padx=(6, 0), fill=tk.Y)
-        send_btn.bind("<Button-1>", lambda e: self._input_field.submit_current())
-        send_btn.bind("<Enter>", lambda e: send_btn.configure(bg="#2f4357"))
-        send_btn.bind("<Leave>", lambda e: send_btn.configure(bg="#253342"))
-        self._send_button = send_btn
-
         self._input_field = InputField(input_frame, on_submit=self._handle_submit)
-        self._input_field.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._input_field.pack(fill=tk.X, expand=True)
 
         tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=2)
 
