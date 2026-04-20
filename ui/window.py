@@ -6,6 +6,8 @@ _log = logging.getLogger("mcko.window")
 
 WINDOW_WIDTH = 300
 WINDOW_HEIGHT = 150
+MIN_WINDOW_WIDTH = 260
+MIN_WINDOW_HEIGHT = 120
 BG_COLOR = "#1e1e1e"
 TITLEBAR_BG = "#2a2a2a"
 TITLEBAR_FG = "#888888"
@@ -30,6 +32,7 @@ class ChatWindow:
         self._window: tk.Toplevel = None
         self._chat_view = None
         self._input_field = None
+        self._send_button = None
 
         # Drag state
         self._drag_x = 0
@@ -96,7 +99,7 @@ class ChatWindow:
 
         hint_label = tk.Label(
             titlebar,
-            text="Ctrl+Space — скрыть",
+            text="Enter send",
             bg=TITLEBAR_BG,
             fg="#444444",
             font=("Courier", 9),
@@ -141,8 +144,25 @@ class ChatWindow:
         input_frame = tk.Frame(win, bg=BG_COLOR)
         input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 4))
 
+        send_btn = tk.Label(
+            input_frame,
+            text="→",
+            bg="#253342",
+            fg="#9cdcfe",
+            font=("Courier", 12, "bold"),
+            width=3,
+            cursor="hand2",
+            padx=0,
+            pady=4,
+        )
+        send_btn.pack(side=tk.RIGHT, padx=(6, 0), fill=tk.Y)
+        send_btn.bind("<Button-1>", lambda e: self._input_field.submit_current())
+        send_btn.bind("<Enter>", lambda e: send_btn.configure(bg="#2f4357"))
+        send_btn.bind("<Leave>", lambda e: send_btn.configure(bg="#253342"))
+        self._send_button = send_btn
+
         self._input_field = InputField(input_frame, on_submit=self._handle_submit)
-        self._input_field.pack(fill=tk.X)
+        self._input_field.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=2)
 
@@ -188,8 +208,8 @@ class ChatWindow:
     def _resize_motion(self, event) -> None:
         dx = event.x_root - self._resize_start_x
         dy = event.y_root - self._resize_start_y
-        new_w = max(200, self._resize_start_w + dx)
-        new_h = max(100, self._resize_start_h + dy)
+        new_w = max(MIN_WINDOW_WIDTH, self._resize_start_w + dx)
+        new_h = max(MIN_WINDOW_HEIGHT, self._resize_start_h + dy)
         self._window.geometry(f"{new_w}x{new_h}")
 
     # ─── Visibility ──────────────────────────────────────────────────────────

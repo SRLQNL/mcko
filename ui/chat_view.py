@@ -9,7 +9,7 @@ USER_FG = "#9cdcfe"
 AI_FG = "#d4d4d4"
 LABEL_FG = "#6a9955"
 FONT_FAMILY = "Courier"
-FONT_SIZE = 12
+FONT_SIZE = 11
 
 
 class ChatView(tk.Text):
@@ -38,11 +38,12 @@ class ChatView(tk.Text):
         self.configure(yscrollcommand=scrollbar.set)
 
         # Tags
-        self.tag_configure("user_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#4fa3d1", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
         self.tag_configure("separator", foreground="#444444")
+        self.configure(spacing1=2, spacing3=4)
 
         _log.info("ChatView initialized")
 
@@ -55,13 +56,13 @@ class ChatView(tk.Text):
     def append_user(self, text: str) -> None:
         """Append a user message block."""
         _log.info("Appending user message: %d chars", len(text))
-        self._write("\nВы: ", "user_label")
+        self._write("\n> ", "user_label")
         self._write(text + "\n", "user_text")
 
     def begin_assistant(self) -> None:
         """Start a new assistant response block (call before streaming chunks)."""
         _log.info("Beginning assistant response block")
-        self._write("\nИИ: ", "ai_label")
+        self._write("\n< ", "ai_label")
 
     def append_assistant_chunk(self, chunk: str) -> None:
         """Append a streaming chunk to the current assistant response."""
