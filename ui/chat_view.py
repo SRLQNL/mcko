@@ -4,12 +4,13 @@ from tkinter import font as tkfont
 
 _log = logging.getLogger("mcko.chat_view")
 
-BG_COLOR = "#141414"
-USER_FG = "#708995"
-AI_FG = "#a8a8a8"
-LABEL_FG = "#586f53"
+BG_COLOR = "#101010"
+USER_FG = "#647b85"
+AI_FG = "#9d9d9d"
+LABEL_FG = "#4f634a"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 9
+SCROLL_STEP = 1
 
 
 class ChatView(tk.Text):
@@ -23,7 +24,7 @@ class ChatView(tk.Text):
             bg=BG_COLOR,
             fg=AI_FG,
             insertbackground=AI_FG,
-            selectbackground="#203847",
+            selectbackground="#1b313d",
             relief=tk.FLAT,
             bd=0,
             padx=5,
@@ -36,13 +37,16 @@ class ChatView(tk.Text):
         scrollbar = tk.Scrollbar(parent, command=self.yview, bg=BG_COLOR, troughcolor=BG_COLOR)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.configure(yscrollcommand=scrollbar.set)
+        self.bind("<MouseWheel>", self._on_mousewheel)
+        self.bind("<Button-4>", self._on_mousewheel_linux_up)
+        self.bind("<Button-5>", self._on_mousewheel_linux_down)
 
         # Tags
-        self.tag_configure("user_label", foreground="#536e7c", font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#4c646f", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
-        self.tag_configure("separator", foreground="#303030")
+        self.tag_configure("separator", foreground="#282828")
         self.configure(spacing1=0, spacing3=1)
 
         _log.info("ChatView initialized")
@@ -79,3 +83,19 @@ class ChatView(tk.Text):
         self.configure(state=tk.NORMAL)
         self.delete("1.0", tk.END)
         self.configure(state=tk.DISABLED)
+
+    def _scroll_lines(self, delta_lines: int) -> str:
+        self.yview_scroll(delta_lines, "units")
+        return "break"
+
+    def _on_mousewheel(self, event) -> str:
+        if event.delta == 0:
+            return "break"
+        direction = -SCROLL_STEP if event.delta > 0 else SCROLL_STEP
+        return self._scroll_lines(direction)
+
+    def _on_mousewheel_linux_up(self, event) -> str:
+        return self._scroll_lines(-SCROLL_STEP)
+
+    def _on_mousewheel_linux_down(self, event) -> str:
+        return self._scroll_lines(SCROLL_STEP)
