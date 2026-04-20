@@ -85,25 +85,8 @@ class ChatWindow:
         titlebar.pack(fill=tk.X, side=tk.TOP)
         titlebar.pack_propagate(False)
 
-        title_label = tk.Label(
-            titlebar,
-            text="MCKO",
-            bg=TITLEBAR_BG,
-            fg=TITLEBAR_FG,
-            font=("Courier", 10),
-            anchor="w",
-            padx=8,
-        )
-        title_label.pack(side=tk.LEFT, fill=tk.Y)
-
-        hint_label = tk.Label(
-            titlebar,
-            text="Enter send",
-            bg=TITLEBAR_BG,
-            fg="#444444",
-            font=("Courier", 9),
-        )
-        hint_label.pack(side=tk.LEFT, fill=tk.Y)
+        drag_pad = tk.Frame(titlebar, bg=TITLEBAR_BG)
+        drag_pad.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         close_btn = tk.Label(
             titlebar,
@@ -132,7 +115,7 @@ class ChatWindow:
         restart_btn.bind("<Leave>", lambda e: restart_btn.configure(fg=CLOSE_BTN_FG))
 
         # Drag bindings on titlebar
-        for widget in (titlebar, title_label, hint_label):
+        for widget in (titlebar, drag_pad):
             widget.bind("<ButtonPress-1>", self._drag_start)
             widget.bind("<B1-Motion>", self._drag_motion)
 
