@@ -6,9 +6,9 @@ from typing import Callable, List
 
 _log = logging.getLogger("mcko.input_field")
 
-BG_COLOR = "#f7f7f7"
-FG_COLOR = "#a3a3a3"
-INSERT_COLOR = "#a3a3a3"
+BG_COLOR = "#f5f5f5"
+FG_COLOR = "#8a8a8a"
+INSERT_COLOR = "#8a8a8a"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 11
 MAX_INPUT_LINES = 2
@@ -32,6 +32,7 @@ class InputField(tk.Text):
             bg=BG_COLOR,
             fg=FG_COLOR,
             insertbackground=INSERT_COLOR,
+            insertwidth=1,
             selectbackground="#d7dde2",
             relief=tk.FLAT,
             bd=0,
@@ -39,6 +40,7 @@ class InputField(tk.Text):
             padx=6,
             pady=3,
             font=(FONT_FAMILY, FONT_SIZE),
+            takefocus=True,
             **kwargs,
         )
 
@@ -53,6 +55,7 @@ class InputField(tk.Text):
         self.bind("<Control-V>", self._on_paste)
         self.bind("<Control-l>", self._on_clear)
         self.bind("<Control-L>", self._on_clear)
+        self.bind("<Button-1>", self._on_click_focus)
         self.bind("<Key>", self._on_key)
         self.bind("<BackSpace>", self._on_backspace)
         self.bind("<Delete>", self._on_delete)
@@ -203,6 +206,10 @@ class InputField(tk.Text):
     def _on_clear(self, event) -> str:
         self.clear()
         return "break"
+
+    def _on_click_focus(self, event) -> None:
+        self.focus_set()
+        self.after_idle(self._sync_height)
 
     # ─── Image label management ───────────────────────────────────────────────
 
