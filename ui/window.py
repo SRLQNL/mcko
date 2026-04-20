@@ -8,11 +8,11 @@ WINDOW_WIDTH = 214
 WINDOW_HEIGHT = 88
 MIN_WINDOW_WIDTH = 204
 MIN_WINDOW_HEIGHT = 78
-BG_COLOR = "#f1f1f1"
-TITLEBAR_BG = "#ececec"
-TITLEBAR_FG = "#9a9a9a"
-BORDER_COLOR = "#dddddd"
-CLOSE_BTN_FG = "#a3a3a3"
+BG_COLOR = "#f7f7f7"
+TITLEBAR_BG = "#f2f2f2"
+TITLEBAR_FG = "#b0b0b0"
+BORDER_COLOR = "#efefef"
+CLOSE_BTN_FG = "#ababab"
 CLOSE_BTN_HOVER = "#8f6f6f"
 ALPHA = 1.0
 
@@ -107,7 +107,7 @@ class ChatWindow:
         )
         restart_btn.pack(side=tk.RIGHT, fill=tk.Y)
         restart_btn.bind("<Button-1>", lambda e: self._on_restart_click())
-        restart_btn.bind("<Enter>", lambda e: restart_btn.configure(fg="#8aa0b3"))
+        restart_btn.bind("<Enter>", lambda e: restart_btn.configure(fg="#9eaab3"))
         restart_btn.bind("<Leave>", lambda e: restart_btn.configure(fg=CLOSE_BTN_FG))
 
         # Drag bindings on titlebar
@@ -128,13 +128,6 @@ class ChatWindow:
 
         self._chat_view = ChatView(chat_frame)
         self._chat_view.pack(fill=tk.BOTH, expand=True)
-
-        # ── Resize grip (правый нижний угол) ─────────────────────────────────
-        grip = tk.Label(win, text="◢", bg=BG_COLOR, fg="#adadad",
-                        font=("Courier", 7), cursor="sizing")
-        grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
-        grip.bind("<ButtonPress-1>", self._resize_start)
-        grip.bind("<B1-Motion>", self._resize_motion)
 
         win.bind("<Escape>", lambda e: self.hide())
 

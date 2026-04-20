@@ -6,9 +6,9 @@ from typing import Callable, List
 
 _log = logging.getLogger("mcko.input_field")
 
-BG_COLOR = "#f3f3f3"
-FG_COLOR = "#919191"
-INSERT_COLOR = "#919191"
+BG_COLOR = "#f7f7f7"
+FG_COLOR = "#a3a3a3"
+INSERT_COLOR = "#a3a3a3"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 11
 MAX_INPUT_LINES = 2
@@ -60,8 +60,8 @@ class InputField(tk.Text):
         # Tag for image labels (visual style)
         self.tag_configure(
             "image_label",
-            background="#e8e8e8",
-            foreground="#8a8a8a",
+            background="#efefef",
+            foreground="#a0a0a0",
             font=(FONT_FAMILY, FONT_SIZE, "bold"),
         )
 

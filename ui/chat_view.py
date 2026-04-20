@@ -4,10 +4,10 @@ from tkinter import font as tkfont
 
 _log = logging.getLogger("mcko.chat_view")
 
-BG_COLOR = "#f1f1f1"
-USER_FG = "#7e8a90"
-AI_FG = "#7f7f7f"
-LABEL_FG = "#7a8574"
+BG_COLOR = "#f7f7f7"
+USER_FG = "#a0a7ab"
+AI_FG = "#9f9f9f"
+LABEL_FG = "#a2a8a0"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 9
 SCROLL_STEP = 1
@@ -43,11 +43,11 @@ class ChatView(tk.Text):
         self.bind("<Button-5>", self._on_mousewheel_linux_down)
 
         # Tags
-        self.tag_configure("user_label", foreground="#8a9499", font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#a8afb2", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
-        self.tag_configure("separator", foreground="#d4d4d4")
+        self.tag_configure("separator", foreground="#ececec")
         self.configure(spacing1=0, spacing3=1)
 
         _log.info("ChatView initialized")
@@ -61,13 +61,13 @@ class ChatView(tk.Text):
     def append_user(self, text: str) -> None:
         """Append a user message block."""
         _log.info("Appending user message: %d chars", len(text))
-        self._write("\n> ", "user_label")
+        self._write("\n", "user_text")
         self._write(text + "\n", "user_text")
 
     def begin_assistant(self) -> None:
         """Start a new assistant response block (call before streaming chunks)."""
         _log.info("Beginning assistant response block")
-        self._write("< ", "ai_label")
+        self._write("", "ai_text")
 
     def append_assistant_chunk(self, chunk: str) -> None:
         """Append a streaming chunk to the current assistant response."""
