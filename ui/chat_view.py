@@ -4,10 +4,10 @@ from tkinter import font as tkfont
 
 _log = logging.getLogger("mcko.chat_view")
 
-BG_COLOR = "#101010"
-USER_FG = "#647b85"
-AI_FG = "#9d9d9d"
-LABEL_FG = "#4f634a"
+BG_COLOR = "#f1f1f1"
+USER_FG = "#7e8a90"
+AI_FG = "#7f7f7f"
+LABEL_FG = "#7a8574"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 9
 SCROLL_STEP = 1
@@ -24,7 +24,7 @@ class ChatView(tk.Text):
             bg=BG_COLOR,
             fg=AI_FG,
             insertbackground=AI_FG,
-            selectbackground="#1b313d",
+            selectbackground="#d7dde2",
             relief=tk.FLAT,
             bd=0,
             padx=5,
@@ -42,11 +42,11 @@ class ChatView(tk.Text):
         self.bind("<Button-5>", self._on_mousewheel_linux_down)
 
         # Tags
-        self.tag_configure("user_label", foreground="#4c646f", font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#8a9499", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
-        self.tag_configure("separator", foreground="#282828")
+        self.tag_configure("separator", foreground="#d4d4d4")
         self.configure(spacing1=0, spacing3=1)
 
         _log.info("ChatView initialized")
