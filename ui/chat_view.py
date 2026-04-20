@@ -34,10 +34,6 @@ class ChatView(tk.Text):
             **kwargs,
         )
 
-        # Scrollbar
-        scrollbar = tk.Scrollbar(parent, command=self.yview, bg=BG_COLOR, troughcolor=BG_COLOR)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.configure(yscrollcommand=scrollbar.set)
         self.bind("<MouseWheel>", self._on_mousewheel)
         self.bind("<Button-4>", self._on_mousewheel_linux_up)
         self.bind("<Button-5>", self._on_mousewheel_linux_down)
