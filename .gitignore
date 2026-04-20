@@ -1,0 +1,9 @@
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+.vexp/
+.env.local
+.env
+watchdog.pid
+.codex

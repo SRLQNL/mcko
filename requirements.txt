@@ -1,0 +1,4 @@
+requests
+pynput
+Pillow
+python-dotenv
