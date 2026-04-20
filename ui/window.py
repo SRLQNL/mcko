@@ -93,7 +93,7 @@ class ChatWindow:
             cursor="hand2",
         )
         close_btn.pack(side=tk.RIGHT, fill=tk.Y)
-        close_btn.bind("<Button-1>", lambda e: self.hide())
+        close_btn.bind("<Button-1>", lambda e: self._on_close_click())
         close_btn.bind("<Enter>", lambda e: close_btn.configure(fg=CLOSE_BTN_HOVER))
         close_btn.bind("<Leave>", lambda e: close_btn.configure(fg=CLOSE_BTN_FG))
 
@@ -244,6 +244,12 @@ class ChatWindow:
         _log.info("Restart button clicked")
         from app.restart import restart_app
         restart_app()
+
+    def _on_close_click(self) -> None:
+        """Полностью завершает приложение через kill.sh."""
+        _log.info("Close button clicked")
+        from app.restart import terminate_app
+        terminate_app()
 
     def _move_cursor_to_end(self) -> None:
         """Перемещает курсор в конец поля ввода, за пределы любых тегов image_label."""

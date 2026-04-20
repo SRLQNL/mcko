@@ -27,3 +27,16 @@ def restart_app() -> None:
         start_new_session=True,  # setsid — процесс не зависит от нашего PID
     )
     _log.info("Restart subprocess launched (detached). Waiting to be killed by kill.sh.")
+
+
+def terminate_app() -> None:
+    """Останавливает все процессы MCKO через kill.sh."""
+    kill_sh = os.path.join(_PROJECT_DIR, "kill.sh")
+    _log.info("Terminate initiated: kill=%s", kill_sh)
+    subprocess.Popen(
+        ["bash", "-c", f"bash '{kill_sh}'"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    _log.info("Terminate subprocess launched (detached). Waiting to be killed by kill.sh.")
