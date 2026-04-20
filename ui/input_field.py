@@ -59,8 +59,8 @@ class InputField(tk.Text):
         # Tag for image labels (visual style)
         self.tag_configure(
             "image_label",
-            background="#e6e2e8",
-            foreground="#8f7d8d",
+            background="#e8e8e8",
+            foreground="#8a8a8a",
             font=(FONT_FAMILY, FONT_SIZE, "bold"),
         )
 

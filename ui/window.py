@@ -66,8 +66,8 @@ class ChatWindow:
         # Stay on top
         win.attributes("-topmost", True)
 
-        # Thin border to distinguish from desktop
-        win.configure(highlightthickness=1, highlightbackground=BORDER_COLOR)
+        # Borderless flat look
+        win.configure(highlightthickness=0, bd=0)
 
         # Bottom-left corner
         win.update_idletasks()
@@ -115,17 +115,12 @@ class ChatWindow:
             widget.bind("<ButtonPress-1>", self._drag_start)
             widget.bind("<B1-Motion>", self._drag_motion)
 
-        # Separator under titlebar
-        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(fill=tk.X)
-
         # ── Input area (пакуется снизу первой — всегда видима) ───────────────
         input_frame = tk.Frame(win, bg=BG_COLOR)
         input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(0, 2))
 
         self._input_field = InputField(input_frame, on_submit=self._handle_submit)
         self._input_field.pack(fill=tk.X, expand=True)
-
-        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=1)
 
         # ── Chat area (заполняет оставшееся пространство) ────────────────────
         chat_frame = tk.Frame(win, bg=BG_COLOR)
