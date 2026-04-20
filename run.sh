@@ -129,11 +129,10 @@ if [ ! -f "$ENV_FILE" ]; then
     if [ -f "$ENV_EXAMPLE" ]; then
         cp "$ENV_EXAMPLE" "$ENV_FILE"
         echo "[*] .env created from template: $ENV_FILE"
-        echo "[!] Fill OPENROUTER_API_KEY in .env and run bash run.sh again."
-        exit 0
+    else
+        echo "[!] .env not found and template is missing: $ENV_FILE"
+        exit 1
     fi
-    echo "[!] .env not found and template is missing: $ENV_FILE"
-    exit 1
 fi
 echo "[✓] .env found: $ENV_FILE"
 
