@@ -6,11 +6,11 @@ from typing import Callable, List
 
 _log = logging.getLogger("mcko.input_field")
 
-BG_COLOR = "#272727"
-FG_COLOR = "#b8b8b8"
-INSERT_COLOR = "#b8b8b8"
+BG_COLOR = "#161616"
+FG_COLOR = "#a8a8a8"
+INSERT_COLOR = "#a8a8a8"
 FONT_FAMILY = "Courier"
-FONT_SIZE = 12
+FONT_SIZE = 11
 MAX_INPUT_LINES = 2
 MIN_INPUT_LINES = 1
 
@@ -32,11 +32,11 @@ class InputField(tk.Text):
             bg=BG_COLOR,
             fg=FG_COLOR,
             insertbackground=INSERT_COLOR,
-            selectbackground="#264f78",
+            selectbackground="#203847",
             relief=tk.FLAT,
             bd=0,
-            padx=8,
-            pady=4,
+            padx=6,
+            pady=3,
             font=(FONT_FAMILY, FONT_SIZE),
             **kwargs,
         )
@@ -59,8 +59,8 @@ class InputField(tk.Text):
         # Tag for image labels (visual style)
         self.tag_configure(
             "image_label",
-            background="#333348",
-            foreground="#b992b5",
+            background="#252530",
+            foreground="#9f829b",
             font=(FONT_FAMILY, FONT_SIZE, "bold"),
         )
 

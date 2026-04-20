@@ -4,16 +4,16 @@ import tkinter as tk
 
 _log = logging.getLogger("mcko.window")
 
-WINDOW_WIDTH = 264
-WINDOW_HEIGHT = 124
-MIN_WINDOW_WIDTH = 236
-MIN_WINDOW_HEIGHT = 98
-BG_COLOR = "#181818"
-TITLEBAR_BG = "#1d1d1d"
-TITLEBAR_FG = "#5f5f5f"
-BORDER_COLOR = "#272727"
-CLOSE_BTN_FG = "#4e4e4e"
-CLOSE_BTN_HOVER = "#9c5555"
+WINDOW_WIDTH = 236
+WINDOW_HEIGHT = 104
+MIN_WINDOW_WIDTH = 220
+MIN_WINDOW_HEIGHT = 88
+BG_COLOR = "#141414"
+TITLEBAR_BG = "#171717"
+TITLEBAR_FG = "#545454"
+BORDER_COLOR = "#202020"
+CLOSE_BTN_FG = "#474747"
+CLOSE_BTN_HOVER = "#8f5252"
 ALPHA = 1.0
 
 
@@ -77,7 +77,7 @@ class ChatWindow:
         win.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
         # ── Custom title bar ─────────────────────────────────────────────────
-        titlebar = tk.Frame(win, bg=TITLEBAR_BG, height=18)
+        titlebar = tk.Frame(win, bg=TITLEBAR_BG, height=15)
         titlebar.pack(fill=tk.X, side=tk.TOP)
         titlebar.pack_propagate(False)
 
@@ -86,10 +86,10 @@ class ChatWindow:
 
         close_btn = tk.Label(
             titlebar,
-            text="  ×  ",
+            text=" × ",
             bg=TITLEBAR_BG,
             fg=CLOSE_BTN_FG,
-            font=("Courier", 13, "bold"),
+            font=("Courier", 11, "bold"),
             cursor="hand2",
         )
         close_btn.pack(side=tk.RIGHT, fill=tk.Y)
@@ -102,7 +102,7 @@ class ChatWindow:
             text=" ↺ ",
             bg=TITLEBAR_BG,
             fg=CLOSE_BTN_FG,
-            font=("Courier", 10, "bold"),
+            font=("Courier", 9, "bold"),
             cursor="hand2",
         )
         restart_btn.pack(side=tk.RIGHT, fill=tk.Y)
@@ -120,16 +120,16 @@ class ChatWindow:
 
         # ── Input area (пакуется снизу первой — всегда видима) ───────────────
         input_frame = tk.Frame(win, bg=BG_COLOR)
-        input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=3, pady=(0, 3))
+        input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(0, 2))
 
         self._input_field = InputField(input_frame, on_submit=self._handle_submit)
         self._input_field.pack(fill=tk.X, expand=True)
 
-        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=3, pady=1)
+        tk.Frame(win, height=1, bg=BORDER_COLOR).pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=1)
 
         # ── Chat area (заполняет оставшееся пространство) ────────────────────
         chat_frame = tk.Frame(win, bg=BG_COLOR)
-        chat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=3, pady=(2, 0))
+        chat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=2, pady=(1, 0))
 
         self._chat_view = ChatView(chat_frame)
         self._chat_view.pack(fill=tk.BOTH, expand=True)
