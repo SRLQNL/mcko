@@ -35,6 +35,7 @@ class InputField(tk.Text):
             selectbackground="#d7dde2",
             relief=tk.FLAT,
             bd=0,
+            highlightthickness=0,
             padx=6,
             pady=3,
             font=(FONT_FAMILY, FONT_SIZE),
