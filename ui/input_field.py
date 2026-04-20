@@ -7,8 +7,8 @@ from typing import Callable, List
 _log = logging.getLogger("mcko.input_field")
 
 BG_COLOR = "#f3f3f3"
-FG_COLOR = "#7f7f7f"
-INSERT_COLOR = "#7f7f7f"
+FG_COLOR = "#919191"
+INSERT_COLOR = "#919191"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 11
 MAX_INPUT_LINES = 2
