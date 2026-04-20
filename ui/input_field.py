@@ -6,15 +6,15 @@ from typing import Callable, List
 
 _log = logging.getLogger("mcko.input_field")
 
-BG_COLOR = "#2d2d2d"
-FG_COLOR = "#d4d4d4"
-INSERT_COLOR = "#d4d4d4"
+BG_COLOR = "#272727"
+FG_COLOR = "#c8c8c8"
+INSERT_COLOR = "#c8c8c8"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 12
 MAX_INPUT_LINES = 2
 MIN_INPUT_LINES = 1
 PLACEHOLDER = "Напиши задачу или вставь фото"
-PLACEHOLDER_COLOR = "#6b7280"
+PLACEHOLDER_COLOR = "#5f6368"
 
 
 class InputField(tk.Text):
@@ -64,8 +64,8 @@ class InputField(tk.Text):
         # Tag for image labels (visual style)
         self.tag_configure(
             "image_label",
-            background="#3a3a5c",
-            foreground="#c586c0",
+            background="#333348",
+            foreground="#b992b5",
             font=(FONT_FAMILY, FONT_SIZE, "bold"),
         )
 

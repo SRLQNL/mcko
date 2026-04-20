@@ -9,12 +9,12 @@ WINDOW_HEIGHT = 150
 MIN_WINDOW_WIDTH = 260
 MIN_WINDOW_HEIGHT = 120
 BG_COLOR = "#1e1e1e"
-TITLEBAR_BG = "#2a2a2a"
-TITLEBAR_FG = "#888888"
-BORDER_COLOR = "#3c3c3c"
-CLOSE_BTN_FG = "#666666"
-CLOSE_BTN_HOVER = "#e05555"
-ALPHA = 0.35  # прозрачность окна (liquid glass)
+TITLEBAR_BG = "#232323"
+TITLEBAR_FG = "#6f6f6f"
+BORDER_COLOR = "#2f2f2f"
+CLOSE_BTN_FG = "#575757"
+CLOSE_BTN_HOVER = "#b85a5a"
+ALPHA = 0.26  # прозрачность окна (liquid glass)
 
 
 class ChatWindow:

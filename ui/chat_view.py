@@ -5,9 +5,9 @@ from tkinter import font as tkfont
 _log = logging.getLogger("mcko.chat_view")
 
 BG_COLOR = "#1e1e1e"
-USER_FG = "#9cdcfe"
-AI_FG = "#d4d4d4"
-LABEL_FG = "#6a9955"
+USER_FG = "#8eb8d0"
+AI_FG = "#c8c8c8"
+LABEL_FG = "#6a8f60"
 FONT_FAMILY = "Courier"
 FONT_SIZE = 11
 
@@ -38,7 +38,7 @@ class ChatView(tk.Text):
         self.configure(yscrollcommand=scrollbar.set)
 
         # Tags
-        self.tag_configure("user_label", foreground="#4fa3d1", font=(FONT_FAMILY, FONT_SIZE, "bold"))
+        self.tag_configure("user_label", foreground="#6e95ab", font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("user_text", foreground=USER_FG)
         self.tag_configure("ai_label", foreground=LABEL_FG, font=(FONT_FAMILY, FONT_SIZE, "bold"))
         self.tag_configure("ai_text", foreground=AI_FG)
