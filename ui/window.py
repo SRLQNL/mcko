@@ -15,6 +15,7 @@ BORDER_COLOR = "#efefef"
 CLOSE_BTN_FG = "#ababab"
 CLOSE_BTN_HOVER = "#8f6f6f"
 ALPHA = 1.0
+SCREEN_MARGIN = 4
 
 
 class ChatWindow:
@@ -69,11 +70,9 @@ class ChatWindow:
         # Borderless flat look
         win.configure(highlightthickness=0, bd=0)
 
-        # Bottom-left corner
+        # Bottom-left corner within the usable work area
         win.update_idletasks()
-        sh = win.winfo_screenheight()
-        x = 0
-        y = sh - WINDOW_HEIGHT
+        x, y = self._get_initial_position(WINDOW_WIDTH, WINDOW_HEIGHT)
         win.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
         # ── Custom title bar ─────────────────────────────────────────────────
@@ -180,9 +179,7 @@ class ChatWindow:
         if self._first_show:
             self._first_show = False
             self._window.update_idletasks()
-            sh = self._window.winfo_screenheight()
-            x = 0
-            y = sh - WINDOW_HEIGHT
+            x, y = self._get_initial_position(WINDOW_WIDTH, WINDOW_HEIGHT)
             self._window.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
             _log.info("ChatWindow positioned bottom-left: +%d+%d", x, y)
         self._window.deiconify()
@@ -238,6 +235,47 @@ class ChatWindow:
             # тега image_label, и _on_key будет блокировать весь ввод через "break"
             self._window.after(250, self._move_cursor_to_end)
             _log.info("InputField focus scheduled")
+
+    def _get_initial_position(self, width: int, height: int) -> tuple[int, int]:
+        """Place the window at the bottom-left of the usable desktop area."""
+        workarea = self._get_x11_workarea()
+        if workarea is not None:
+            work_x, work_y, work_w, work_h = workarea
+            x = work_x + SCREEN_MARGIN
+            y = work_y + work_h - height - SCREEN_MARGIN
+            return max(0, x), max(0, y)
+
+        screen_h = self._window.winfo_screenheight() if self._window else self._root.winfo_screenheight()
+        return SCREEN_MARGIN, max(0, screen_h - height - SCREEN_MARGIN)
+
+    def _get_x11_workarea(self) -> tuple[int, int, int, int] | None:
+        """Return the current X11 work area as (x, y, width, height), if available."""
+        is_x11 = os.name == "posix" and bool(os.environ.get("DISPLAY"))
+        if not is_x11:
+            return None
+        try:
+            from Xlib import Xatom, display as xdisplay
+
+            d = xdisplay.Display()
+            root = d.screen().root
+            atom = d.intern_atom("_NET_WORKAREA")
+            prop = root.get_full_property(atom, Xatom.CARDINAL)
+            if prop is None or not prop.value:
+                d.close()
+                return None
+
+            values = list(prop.value)
+            if len(values) < 4:
+                d.close()
+                return None
+
+            workarea = tuple(int(v) for v in values[:4])
+            d.close()
+            _log.info("X11 workarea detected: %s", workarea)
+            return workarea
+        except Exception as exc:
+            _log.warning("Failed to read X11 workarea: %s", exc)
+            return None
 
     def _on_restart_click(self) -> None:
         """Запускает перезапуск приложения через kill.sh → run.sh."""
