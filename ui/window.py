@@ -14,7 +14,7 @@ TITLEBAR_FG = "#6f6f6f"
 BORDER_COLOR = "#2f2f2f"
 CLOSE_BTN_FG = "#575757"
 CLOSE_BTN_HOVER = "#b85a5a"
-ALPHA = 0.26  # прозрачность окна (liquid glass)
+ALPHA = 1.0
 
 
 class ChatWindow:
@@ -65,10 +65,6 @@ class ChatWindow:
 
         # Stay on top
         win.attributes("-topmost", True)
-
-        # Полупрозрачность — через _NET_WM_WINDOW_OPACITY для X11/KWin compositor
-        win.attributes("-alpha", ALPHA)  # работает без overrideredirect
-        self._apply_x11_opacity(win, ALPHA)  # для overrideredirect на X11
 
         # Thin border to distinguish from desktop
         win.configure(highlightthickness=1, highlightbackground=BORDER_COLOR)
@@ -204,8 +200,6 @@ class ChatWindow:
         self._window.deiconify()
         self._window.update_idletasks()
         self._window.lift()
-        # Переустанавливаем opacity после deiconify — compositor читает свойство у mapped окна
-        self._apply_x11_opacity(self._window, ALPHA)
         self._focus_input()
         self._visible = True
 
@@ -256,26 +250,6 @@ class ChatWindow:
             # тега image_label, и _on_key будет блокировать весь ввод через "break"
             self._window.after(250, self._move_cursor_to_end)
             _log.info("InputField focus scheduled")
-
-    def _apply_x11_opacity(self, win: tk.Toplevel, alpha: float) -> None:
-        """Устанавливает _NET_WM_WINDOW_OPACITY — читается KWin compositor напрямую."""
-        is_x11 = os.name == "posix" and bool(os.environ.get("DISPLAY"))
-        if not is_x11:
-            return
-        try:
-            from Xlib import display as xdisplay, Xatom
-            d = xdisplay.Display()
-            win_id = win.winfo_id()
-            xwin = d.create_resource_object("window", win_id)
-            OPACITY = d.intern_atom("_NET_WM_WINDOW_OPACITY")
-            opacity_value = int(alpha * 0xFFFFFFFF)
-            # Xatom.CARDINAL = 6 — предопределённый X-атом, не intern_atom
-            xwin.change_property(OPACITY, Xatom.CARDINAL, 32, [opacity_value])
-            d.sync()
-            d.close()
-            _log.info("_NET_WM_WINDOW_OPACITY set: %d (alpha=%.2f)", opacity_value, alpha)
-        except Exception as exc:
-            _log.warning("Failed to set _NET_WM_WINDOW_OPACITY: %s", exc)
 
     def _on_restart_click(self) -> None:
         """Запускает перезапуск приложения через kill.sh → run.sh."""
