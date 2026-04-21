@@ -136,9 +136,9 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 echo "[✓] .env found: $ENV_FILE"
 
-if ! grep -Eq '^[[:space:]]*OPENROUTER_API_KEY=[^[:space:]#]+' "$ENV_FILE"; then
-    echo "[!] OPENROUTER_API_KEY is empty in $ENV_FILE"
-    echo "[!] Fill the key in .env and run bash run.sh again."
+if ! grep -Eq '^[[:space:]]*(OPENROUTER_API_KEY|OPENROUTER_API_KEYS)=[^[:space:]#]+' "$ENV_FILE"; then
+    echo "[!] OPENROUTER_API_KEY / OPENROUTER_API_KEYS is empty in $ENV_FILE"
+    echo "[!] Fill a key in .env and run bash run.sh again."
     exit 1
 fi
 

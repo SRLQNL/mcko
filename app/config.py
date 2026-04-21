@@ -1,7 +1,11 @@
 import base64
 import os
-from dotenv import load_dotenv
 from app.logger import logger
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = None
 
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
@@ -33,8 +37,12 @@ class Config:
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 
         if os.path.exists(env_path):
-            load_dotenv(env_path, override=True)
-            logger.info("Loaded .env from: %s (override=True)", env_path)
+            if load_dotenv is not None:
+                load_dotenv(env_path, override=True)
+                logger.info("Loaded .env from: %s (override=True)", env_path)
+            else:
+                self._load_env_fallback(env_path)
+                logger.warning("python-dotenv not installed, used fallback .env loader: %s", env_path)
         else:
             logger.warning(".env file not found at %s, using environment variables only", env_path)
 
@@ -42,7 +50,7 @@ class Config:
         if raw_keys:
             self.api_keys = self._parse_secret_list(raw_keys)
         elif os.environ.get("OPENROUTER_API_KEY"):
-            self.api_keys = [self._normalize_secret(os.environ["OPENROUTER_API_KEY"])]
+            self.api_keys = self._parse_secret_list(os.environ["OPENROUTER_API_KEY"])
         else:
             logger.error("Missing required config fields: %s", REQUIRED_FIELDS)
             raise ValueError(f"Missing required environment variables: {REQUIRED_FIELDS}")
@@ -104,3 +112,17 @@ class Config:
                     parts.append(self._normalize_secret(item))
         logger.info("Parsed %d API keys from OPENROUTER_API_KEYS", len(parts))
         return parts
+
+    def _load_env_fallback(self, env_path: str) -> None:
+        """Minimal .env loader used when python-dotenv is unavailable."""
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                os.environ[key] = value
