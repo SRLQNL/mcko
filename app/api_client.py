@@ -81,7 +81,14 @@ class APIClient:
 
         if not response.ok:
             body = response.text[:500]
-            _log.error("API error: status=%d, body=%s", response.status_code, body)
+            request_id = response.headers.get("x-request-id") or response.headers.get("cf-ray") or "-"
+            _log.error(
+                "API error: model=%s status=%d request_id=%s body=%s",
+                self.model,
+                response.status_code,
+                request_id,
+                body,
+            )
             if response.status_code == 401 and "User not found" in body:
                 _log.error(
                     "OpenRouter returned 401 User not found. This usually means an invalid/revoked key, "
