@@ -25,7 +25,7 @@ def main():
     config.load()
 
     # ── Core components ─────────────────────────────────────────────────────
-    api_client = APIClient(config.api_key, config.model)
+    api_client = APIClient(config.api_keys, config.model)
     session = Session()
     logger.info("Core components initialized")
 
