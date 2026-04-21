@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import base64
 import os
+from typing import List
 from app.logger import logger
 
 try:
@@ -23,7 +26,7 @@ DEFAULTS = {
 class Config:
     def __init__(self):
         self.api_key: str = ""
-        self.api_keys: list[str] = []
+        self.api_keys: List[str] = []
         self.model: str = ""
         self.system_prompt_1: str = ""
         self.system_prompt_2: str = ""
@@ -100,7 +103,7 @@ class Config:
                 logger.warning("base64 decode failed, using value as-is: %s", exc)
         return normalized
 
-    def _parse_secret_list(self, raw_value: str) -> list[str]:
+    def _parse_secret_list(self, raw_value: str) -> List[str]:
         """Parse OPENROUTER_API_KEYS from newline- or comma-separated values."""
         logger.info("Parsing OPENROUTER_API_KEYS from environment")
         normalized = raw_value.replace("\r", "\n")
