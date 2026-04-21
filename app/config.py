@@ -39,8 +39,8 @@ class Config:
 
         if os.path.exists(env_path):
             if load_dotenv is not None:
-                load_dotenv(env_path, override=True)
-                logger.info("Loaded .env from: %s (override=True)", env_path)
+                load_dotenv(env_path, override=False)
+                logger.info("Loaded .env from: %s (override=False)", env_path)
             else:
                 self._load_env_fallback(env_path)
                 logger.warning("python-dotenv not installed, used fallback .env loader: %s", env_path)
@@ -109,4 +109,5 @@ class Config:
                 value = value.strip()
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
                     value = value[1:-1]
-                os.environ[key] = value
+                if value and key not in os.environ:
+                    os.environ[key] = value
