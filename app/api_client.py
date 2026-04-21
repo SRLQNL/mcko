@@ -9,6 +9,7 @@ import requests
 from app.logger import logger
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+MAX_TOKENS = 4096
 
 _log = logging.getLogger("mcko.api_client")
 
@@ -65,6 +66,7 @@ class APIClient:
             "model": self.model,
             "messages": full_messages,
             "stream": stream,
+            "max_tokens": MAX_TOKENS,
         }
 
         try:
