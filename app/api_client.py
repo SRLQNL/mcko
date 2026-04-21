@@ -14,14 +14,13 @@ _log = logging.getLogger("mcko.api_client")
 
 
 class APIClient:
-    def __init__(self, api_keys: list[str], model: str):
-        self.api_keys = api_keys
+    def __init__(self, api_key: str, model: str):
+        self.api_key = api_key
         self.model = model
-        self._active_key_index = 0
-        _log.info("APIClient initialized: model=%s, keys=%d", model, len(api_keys))
+        _log.info("APIClient initialized: model=%s", model)
 
-    def _build_headers(self, api_key: str) -> dict:
-        auth_header = f"Bearer {api_key}"
+    def _build_headers(self) -> dict:
+        auth_header = f"Bearer {self.api_key}"
         _log.info(
             "Building headers: auth_prefix=%s, auth_length=%d",
             auth_header[:15],
@@ -31,9 +30,6 @@ class APIClient:
             "Authorization": auth_header,
             "Content-Type": "application/json",
         }
-
-    def _should_try_next_key(self, response: requests.Response) -> bool:
-        return response.status_code in (401, 403, 429)
 
     def send(
         self,
@@ -71,45 +67,32 @@ class APIClient:
             "stream": stream,
         }
 
-        last_error = ""
-        key_count = len(self.api_keys)
-        for offset in range(key_count):
-            key_index = (self._active_key_index + offset) % key_count
-            api_key = self.api_keys[key_index]
-            try:
-                response = requests.post(
-                    ENDPOINT,
-                    headers=self._build_headers(api_key),
-                    json=payload,
-                    stream=stream,
-                    timeout=(15, 120),  # (connect, read) — read применяется к каждому чанку стрима
-                )
-            except requests.RequestException as exc:
-                _log.error("Network error on key #%d: %s", key_index + 1, exc)
-                return f"[Ошибка сети: {exc}]"
+        try:
+            response = requests.post(
+                ENDPOINT,
+                headers=self._build_headers(),
+                json=payload,
+                stream=stream,
+                timeout=(15, 120),  # (connect, read) — read применяется к каждому чанку стрима
+            )
+        except requests.RequestException as exc:
+            _log.error("Network error: %s", exc)
+            return f"[Ошибка сети: {exc}]"
 
-            if response.ok:
-                self._active_key_index = key_index
-                _log.info("API request succeeded with key #%d", key_index + 1)
-                if stream:
-                    return self._stream_response(response)
-                else:
-                    return self._parse_full_response(response)
-
+        if not response.ok:
             body = response.text[:500]
-            last_error = f"[Ошибка API {response.status_code}: {body}]"
-            _log.error("API error on key #%d: status=%d, body=%s", key_index + 1, response.status_code, body)
+            _log.error("API error: status=%d, body=%s", response.status_code, body)
             if response.status_code == 401 and "User not found" in body:
                 _log.error(
                     "OpenRouter returned 401 User not found. This usually means an invalid/revoked key, "
                     "a stale env var overriding .env, or a temporary OpenRouter auth-side incident."
                 )
-            if offset < key_count - 1 and self._should_try_next_key(response):
-                _log.warning("Trying next API key after status %d on key #%d", response.status_code, key_index + 1)
-                continue
-            break
+            return f"[Ошибка API {response.status_code}: {body}]"
 
-        return last_error or "[Ошибка API: неизвестная ошибка]"
+        if stream:
+            return self._stream_response(response)
+        else:
+            return self._parse_full_response(response)
 
     def _parse_full_response(self, response: requests.Response) -> str:
         try:

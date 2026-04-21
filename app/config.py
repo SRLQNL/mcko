@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import List
 from app.logger import logger
 
 try:
@@ -26,7 +25,6 @@ DEFAULTS = {
 class Config:
     def __init__(self):
         self.api_key: str = ""
-        self.api_keys: List[str] = []
         self.model: str = ""
         self.system_prompt_1: str = ""
         self.system_prompt_2: str = ""
@@ -49,26 +47,18 @@ class Config:
         else:
             logger.warning(".env file not found at %s, using environment variables only", env_path)
 
-        raw_keys = os.environ.get("OPENROUTER_API_KEYS", "").strip()
-        if raw_keys:
-            self.api_keys = self._parse_secret_list(raw_keys)
-        elif os.environ.get("OPENROUTER_API_KEY"):
-            self.api_keys = self._parse_secret_list(os.environ["OPENROUTER_API_KEY"])
-        else:
+        if not os.environ.get("OPENROUTER_API_KEY"):
             logger.error("Missing required config fields: %s", REQUIRED_FIELDS)
             raise ValueError(f"Missing required environment variables: {REQUIRED_FIELDS}")
 
-        self.api_keys = [key for key in self.api_keys if key]
-        if not self.api_keys:
-            raise ValueError("No valid OPENROUTER_API_KEY values found after normalization")
-
-        self.api_key = self.api_keys[0]
+        self.api_key = self._normalize_secret(os.environ["OPENROUTER_API_KEY"])
+        if not self.api_key:
+            raise ValueError("OPENROUTER_API_KEY is empty after stripping whitespace")
         logger.info(
-            "Primary API key loaded: starts_with=%s, ends_with=%s, length=%d, keys_total=%d",
+            "Primary API key loaded: starts_with=%s, ends_with=%s, length=%d",
             self.api_key[:8],
             self.api_key[-4:],
             len(self.api_key),
-            len(self.api_keys),
         )
         self.model = os.environ.get("OPENROUTER_MODEL", DEFAULTS["OPENROUTER_MODEL"])
         self.system_prompt_1 = os.environ.get("SYSTEM_PROMPT_1", DEFAULTS["SYSTEM_PROMPT_1"])
@@ -102,19 +92,6 @@ class Config:
             except Exception as exc:
                 logger.warning("base64 decode failed, using value as-is: %s", exc)
         return normalized
-
-    def _parse_secret_list(self, raw_value: str) -> List[str]:
-        """Parse OPENROUTER_API_KEYS from newline- or comma-separated values."""
-        logger.info("Parsing OPENROUTER_API_KEYS from environment")
-        normalized = raw_value.replace("\r", "\n")
-        parts = []
-        for line in normalized.split("\n"):
-            for chunk in line.split(","):
-                item = chunk.strip()
-                if item:
-                    parts.append(self._normalize_secret(item))
-        logger.info("Parsed %d API keys from OPENROUTER_API_KEYS", len(parts))
-        return parts
 
     def _load_env_fallback(self, env_path: str) -> None:
         """Minimal .env loader used when python-dotenv is unavailable."""
