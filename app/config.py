@@ -60,13 +60,13 @@ class Config:
             self.api_key[-4:],
             len(self.api_key),
         )
-        self.model = os.environ.get("OPENROUTER_MODEL", DEFAULTS["OPENROUTER_MODEL"])
-        self.system_prompt_1 = os.environ.get("SYSTEM_PROMPT_1", DEFAULTS["SYSTEM_PROMPT_1"])
-        self.system_prompt_2 = os.environ.get("SYSTEM_PROMPT_2", DEFAULTS["SYSTEM_PROMPT_2"])
-        self.hotkey_window = os.environ.get("HOTKEY_WINDOW", DEFAULTS["HOTKEY_WINDOW"])
-        self.hotkey_show = os.environ.get("HOTKEY_SHOW", DEFAULTS["HOTKEY_SHOW"])
-        self.hotkey_clipboard = os.environ.get("HOTKEY_CLIPBOARD", DEFAULTS["HOTKEY_CLIPBOARD"])
-        self.hotkey_screenshot = os.environ.get("HOTKEY_SCREENSHOT", DEFAULTS["HOTKEY_SCREENSHOT"])
+        self.model = self._env_or_default("OPENROUTER_MODEL")
+        self.system_prompt_1 = self._env_or_default("SYSTEM_PROMPT_1")
+        self.system_prompt_2 = self._env_or_default("SYSTEM_PROMPT_2")
+        self.hotkey_window = self._env_or_default("HOTKEY_WINDOW")
+        self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
+        self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
+        self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
 
         logger.info(
             "Config loaded: model=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s",
@@ -92,6 +92,10 @@ class Config:
             except Exception as exc:
                 logger.warning("base64 decode failed, using value as-is: %s", exc)
         return normalized
+
+    def _env_or_default(self, key: str) -> str:
+        value = os.environ.get(key, "").strip()
+        return value or DEFAULTS[key]
 
     def _load_env_fallback(self, env_path: str) -> None:
         """Minimal .env loader used when python-dotenv is unavailable."""
