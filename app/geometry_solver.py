@@ -66,6 +66,11 @@ class GeometryPhotoSolver:
 
     def solve_content_blocks(self, content_blocks: List[Dict]) -> str:
         image_urls, user_text = self._extract_image_payload(content_blocks)
+        if not image_urls:
+            _log.info("Running text-only solver path with Kimi only")
+            kimi_result = self._call_kimi_text_only(user_text)
+            return self._format_text_only_result(kimi_result)
+
         preprocessed = self._prepare_variants(image_urls[0]) if image_urls else {
             "full_image": None,
             "text_crop": None,
@@ -147,6 +152,21 @@ class GeometryPhotoSolver:
     def _call_qwen(self, variants: Dict[str, Optional[str]], user_text: str) -> Dict:
         user_content = self._build_qwen_content(variants, user_text)
         result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
+        return self._normalize_result(result)
+
+    def _call_kimi_text_only(self, user_text: str) -> Dict:
+        prompt = (
+            "Solve the geometry or stereometry problem from text and return strict JSON.\n"
+            "Extract givens, target, concise reasoning, final answer, confidence, and ambiguities.\n"
+            "If the problem statement is incomplete or ambiguous, report it explicitly.\n"
+        )
+        if user_text:
+            prompt += "Problem text:\n%s" % user_text
+        result = self._request_json(
+            self.kimi_model,
+            KIMI_SYSTEM_PROMPT,
+            [{"type": "text", "text": prompt}],
+        )
         return self._normalize_result(result)
 
     def _call_kimi(
@@ -336,6 +356,9 @@ class GeometryPhotoSolver:
             visual["summary"] = visual.get("summary") or ""
             visual["confidence"] = self._coerce_confidence(visual.get("confidence"))
             visual["possible_ambiguities"] = visual.get("possible_ambiguities") or []
+        final_answer = result["final_answer"]
+        final_answer["value"] = "" if final_answer.get("value") is None else str(final_answer.get("value"))
+        final_answer["format"] = str(final_answer.get("format") or "text")
         return result
 
     def _compare_results(self, kimi: Dict, qwen: Dict, llama: Dict) -> Dict:
@@ -527,7 +550,20 @@ class GeometryPhotoSolver:
         return float(len(left_set & right_set)) / float(len(union))
 
     def _normalize_text(self, text: str) -> str:
-        return " ".join((text or "").strip().lower().split())
+        if text is None:
+            return ""
+        return " ".join(str(text).strip().lower().split())
+
+    def _format_text_only_result(self, kimi_result: Dict) -> str:
+        final_answer = kimi_result["final_answer"].get("value", "").strip()
+        if final_answer and not kimi_result.get("needs_clarification"):
+            return "1) %s" % final_answer
+
+        ambiguities = kimi_result["visual_interpretation"].get("possible_ambiguities") or []
+        ambiguity_text = "; ".join(ambiguities) if ambiguities else "условие понято неоднозначно"
+        if final_answer:
+            return "1) Низкая уверенность: %s. Предварительный ответ: %s" % (ambiguity_text, final_answer)
+        return "1) Низкая уверенность: %s" % ambiguity_text
 
     def _data_url_to_bytes(self, data_url: str) -> Optional[bytes]:
         if not data_url.startswith("data:image/"):
