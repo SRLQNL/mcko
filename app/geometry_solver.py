@@ -66,13 +66,14 @@ class GeometryPhotoSolver:
 
     def solve_content_blocks(self, content_blocks: List[Dict]) -> str:
         image_urls, user_text = self._extract_image_payload(content_blocks)
-        if not image_urls:
-            _log.warning("solve_content_blocks called without image payload")
-            return "[Ошибка решателя: изображение не найдено]"
-
-        preprocessed = self._prepare_variants(image_urls[0])
+        preprocessed = self._prepare_variants(image_urls[0]) if image_urls else {
+            "full_image": None,
+            "text_crop": None,
+            "diagram_crop": None,
+        }
         _log.info(
-            "Prepared image variants: text_crop=%s diagram_crop=%s",
+            "Prepared request variants: has_image=%s text_crop=%s diagram_crop=%s",
+            bool(image_urls),
             preprocessed.get("text_crop") is not None,
             preprocessed.get("diagram_crop") is not None,
         )
@@ -172,16 +173,25 @@ class GeometryPhotoSolver:
         return self._normalize_result(result)
 
     def _build_qwen_content(self, variants: Dict[str, Optional[str]], user_text: str) -> List[Dict]:
-        text_prompt = (
-            "Parse this geometry photo into strict JSON.\n"
-            "Extract OCR text, entities, relations, givens, target, ambiguities, and confidence.\n"
-            "Do not solve unless needed for normalization."
-        )
+        has_image = bool(variants.get("full_image"))
+        if has_image:
+            text_prompt = (
+                "Parse this geometry photo into strict JSON.\n"
+                "Extract OCR text, entities, relations, givens, target, ambiguities, and confidence.\n"
+                "Do not solve unless needed for normalization."
+            )
+        else:
+            text_prompt = (
+                "Parse this geometry or stereometry problem text into strict JSON.\n"
+                "Extract givens, target, inferred entities, relations, ambiguities, and confidence.\n"
+                "Do not optimize for solving."
+            )
         if user_text:
             text_prompt += "\nUser hint:\n%s" % user_text
 
         content = [{"type": "text", "text": text_prompt}]
-        content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
+        if has_image:
+            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
         if variants.get("text_crop"):
             content.append({"type": "text", "text": "Top crop likely contains problem text."})
             content.append({"type": "image_url", "image_url": {"url": variants["text_crop"]}})
@@ -197,21 +207,29 @@ class GeometryPhotoSolver:
         qwen_result: Dict,
         mismatch_summary: Optional[str],
     ) -> List[Dict]:
-        prompt = (
-            "Solve the geometry problem from the image and return strict JSON.\n"
-            "Use the Qwen visual parse as a helper, but correct it if the image clearly disagrees.\n"
-            "Prioritize correct diagram interpretation over aggressive solving.\n"
-        )
+        has_image = bool(variants.get("full_image"))
+        if has_image:
+            prompt = (
+                "Solve the geometry problem from the image and return strict JSON.\n"
+                "Use the Qwen visual parse as a helper, but correct it if the image clearly disagrees.\n"
+                "Prioritize correct diagram interpretation over aggressive solving.\n"
+            )
+        else:
+            prompt = (
+                "Solve the geometry or stereometry problem from text and return strict JSON.\n"
+                "Use the Qwen parse as a helper, but reason independently.\n"
+                "Prioritize faithful interpretation of givens and target.\n"
+            )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
         prompt += "Qwen parse:\n%s\n" % json.dumps(qwen_result, ensure_ascii=False)
         if mismatch_summary:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
-        return [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": variants["full_image"]}},
-        ]
+        content = [{"type": "text", "text": prompt}]
+        if has_image:
+            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
+        return content
 
     def _build_llama_content(
         self,
@@ -221,11 +239,19 @@ class GeometryPhotoSolver:
         kimi_result: Dict,
         mismatch_summary: Optional[str],
     ) -> List[Dict]:
-        prompt = (
-            "Verify the geometry problem from the image and return strict JSON.\n"
-            "Check the diagram interpretation, givens, target, and final answer.\n"
-            "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
-        )
+        has_image = bool(variants.get("full_image"))
+        if has_image:
+            prompt = (
+                "Verify the geometry problem from the image and return strict JSON.\n"
+                "Check the diagram interpretation, givens, target, and final answer.\n"
+                "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+            )
+        else:
+            prompt = (
+                "Verify the geometry or stereometry problem from text and return strict JSON.\n"
+                "Check givens, target, reasoning, and final answer.\n"
+                "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+            )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
         prompt += "Qwen parse:\n%s\n" % json.dumps(qwen_result, ensure_ascii=False)
@@ -233,10 +259,10 @@ class GeometryPhotoSolver:
         if mismatch_summary:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
-        return [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": variants["full_image"]}},
-        ]
+        content = [{"type": "text", "text": prompt}]
+        if has_image:
+            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
+        return content
 
     def _request_json(self, model: str, system_prompt: str, user_content: List[Dict]) -> Dict:
         payload = {

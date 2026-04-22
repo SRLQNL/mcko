@@ -27,8 +27,7 @@ def handle_clipboard_hotkey(config: Config, api_client: APIClient, geometry_solv
         if not text:
             _log.warning("read_text returned empty, aborting")
             return
-        content = text
-        messages = [{"role": "user", "content": content}]
+        content_blocks = [{"type": "text", "text": text}]
 
     else:  # image
         image_bytes = cb.read_image()
@@ -40,23 +39,8 @@ def handle_clipboard_hotkey(config: Config, api_client: APIClient, geometry_solv
             {"type": "image_url", "image_url": {"url": data_url}},
             {"type": "text", "text": "Реши задачу по изображению."},
         ]
-        _log.info("Sending clipboard image to geometry solver")
-        result = geometry_solver.solve_content_blocks(content_blocks)
-        cb.write_text(result)
-        _log.info("Geometry solver response written to clipboard")
-        return
 
-    _log.info("Sending clipboard content to API (stream=False)")
-    result = api_client.send(
-        system_prompt=config.system_prompt_2,
-        messages=messages,
-        stream=False,
-    )
-
-    if isinstance(result, str):
-        _log.info("Response received: %d chars", len(result))
-        cb.write_text(result)
-        _log.info("Response written to clipboard")
-    else:
-        # Should not happen with stream=False, but guard anyway
-        _log.error("Unexpected generator returned for stream=False")
+    _log.info("Sending clipboard content to geometry solver")
+    result = geometry_solver.solve_content_blocks(content_blocks)
+    cb.write_text(result)
+    _log.info("Geometry solver response written to clipboard")

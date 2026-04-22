@@ -89,14 +89,7 @@ def main():
             logger.info("Starting response worker: has_images=%s", has_images)
             full_text = ""
             had_stream_error = False
-            if has_images:
-                result = geometry_solver.solve_content_blocks(content_blocks)
-            else:
-                result = api_client.send(
-                    system_prompt=config.system_prompt_1,
-                    messages=history,
-                    stream=True,
-                )
+            result = geometry_solver.solve_content_blocks(content_blocks)
             if isinstance(result, str):
                 # Error string
                 root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
