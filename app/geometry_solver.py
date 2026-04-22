@@ -35,6 +35,7 @@ KIMI_SYSTEM_PROMPT = (
     "Reason as fully as needed internally, but output only strict JSON. "
     "Prioritize correct interpretation of the problem and image over speed. "
     "Do not invent objects or relations. "
+    "If the problem is solvable, final_answer.value must be non-empty and contain the answer only. "
     + JSON_SCHEMA_NOTE
 )
 
@@ -42,6 +43,7 @@ QWEN_SYSTEM_PROMPT = (
     "You are the parser and visual verifier for geometry and stereometry tasks. "
     "Extract OCR text, entities, relations, givens, target, and ambiguities. "
     "Do not optimize for solving. Lower confidence instead of guessing. "
+    "Leave final_answer empty unless the answer is explicitly printed in the source itself. "
     + JSON_SCHEMA_NOTE
 )
 
@@ -155,7 +157,7 @@ class GeometryPhotoSolver:
     def _call_qwen(self, variants: Dict[str, Optional[str]], user_text: str) -> Dict:
         user_content = self._build_qwen_content(variants, user_text)
         result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result)
+        return self._normalize_result(result, role="parser")
 
     def _call_kimi(
         self,
@@ -166,7 +168,7 @@ class GeometryPhotoSolver:
     ) -> Dict:
         user_content = self._build_kimi_content(variants, user_text, qwen_result, mismatch_summary)
         result = self._request_json(self.kimi_model, KIMI_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result)
+        return self._normalize_result(result, role="solver")
 
     def _call_llama(
         self,
@@ -178,7 +180,7 @@ class GeometryPhotoSolver:
     ) -> Dict:
         user_content = self._build_llama_content(variants, user_text, qwen_result, kimi_result, mismatch_summary)
         result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result)
+        return self._normalize_result(result, role="verifier")
 
     def _build_qwen_content(self, variants: Dict[str, Optional[str]], user_text: str) -> List[Dict]:
         has_image = bool(variants.get("full_image"))
@@ -377,14 +379,14 @@ class GeometryPhotoSolver:
         repaired_text = message.get("content") or ""
         return repaired_text
 
-    def _normalize_result(self, raw: Dict) -> Dict:
+    def _normalize_result(self, raw: Dict, role: str = "generic") -> Dict:
         result = {
             "task_type": raw.get("task_type") or "geometry_photo",
             "ocr_text": raw.get("ocr_text") or "",
             "normalized_problem_text": raw.get("normalized_problem_text") or "",
-            "diagram_entities": raw.get("diagram_entities") or raw.get("objects") or [],
-            "diagram_relations": raw.get("diagram_relations") or raw.get("relations") or [],
-            "givens": raw.get("givens") or [],
+            "diagram_entities": self._normalize_entities(raw.get("diagram_entities") or raw.get("objects") or []),
+            "diagram_relations": self._normalize_relations(raw.get("diagram_relations") or raw.get("relations") or []),
+            "givens": self._normalize_givens(raw.get("givens") or []),
             "target": raw.get("target") or {"statement": ""},
             "visual_interpretation": raw.get("visual_interpretation") or {
                 "summary": raw.get("visual_summary") or "",
@@ -416,7 +418,74 @@ class GeometryPhotoSolver:
         final_answer = result["final_answer"]
         final_answer["value"] = "" if final_answer.get("value") is None else str(final_answer.get("value"))
         final_answer["format"] = str(final_answer.get("format") or "text")
+
+        if role == "parser":
+            result["final_answer"] = {"value": "", "format": "text"}
+            result["answer_confidence"] = 0.0
+            result["reasoning_summary"] = []
+            result["solution_steps"] = []
+
         return result
+
+    def _normalize_entities(self, value) -> List[Dict]:
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            value = [value] if value else []
+
+        normalized = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                text = self._normalize_text(item)
+                if text:
+                    normalized.append({"label": str(item), "type": "raw"})
+        return normalized
+
+    def _normalize_relations(self, value) -> List:
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            value = [value] if value else []
+
+        normalized = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                text = str(item).strip()
+                if text:
+                    normalized.append(text)
+        return normalized
+
+    def _normalize_givens(self, value) -> List[Dict]:
+        if isinstance(value, dict):
+            normalized = []
+            for key, item in value.items():
+                statement = "%s: %s" % (key, item)
+                normalized.append({"statement": statement})
+            return normalized
+        if not isinstance(value, list):
+            value = [value] if value else []
+
+        normalized = []
+        for item in value:
+            if isinstance(item, dict):
+                if item.get("statement"):
+                    normalized.append(item)
+                else:
+                    parts = []
+                    for key, subvalue in item.items():
+                        parts.append("%s: %s" % (key, subvalue))
+                    statement = "; ".join(parts).strip()
+                    if statement:
+                        normalized.append({"statement": statement})
+            else:
+                text = str(item).strip()
+                if text:
+                    normalized.append({"statement": text})
+        return normalized
 
     def _compare_results(self, kimi: Dict, qwen: Dict, llama: Dict) -> Dict:
         qwen_diagram = self._jaccard(self._relation_keys(kimi), self._relation_keys(qwen))
@@ -482,6 +551,10 @@ class GeometryPhotoSolver:
 
     def _format_user_result(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
         final_answer = kimi["final_answer"].get("value", "").strip()
+        if not final_answer and llama is not None:
+            final_answer = llama["final_answer"].get("value", "").strip()
+        if not final_answer:
+            final_answer = qwen["final_answer"].get("value", "").strip()
         if final_answer:
             return "1) %s" % final_answer
 
@@ -605,12 +678,13 @@ class GeometryPhotoSolver:
     def _relation_keys(self, result: Dict) -> List[str]:
         keys = []
         for relation in result.get("diagram_relations", []):
-            if not isinstance(relation, dict):
-                continue
-            rel_type = relation.get("type", "")
-            subject = relation.get("subject", "")
-            obj = relation.get("object", "")
-            key = "%s:%s:%s" % (rel_type, subject, obj)
+            if isinstance(relation, dict):
+                rel_type = relation.get("type", "")
+                subject = relation.get("subject", "")
+                obj = relation.get("object", "")
+                key = "%s:%s:%s" % (rel_type, subject, obj)
+            else:
+                key = self._normalize_text(relation)
             if key not in keys:
                 keys.append(key)
         return keys
