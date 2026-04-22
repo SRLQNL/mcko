@@ -18,7 +18,6 @@ JSON_MAX_TOKENS = 2200
 DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
 DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
 DEFAULT_LLAMA_MODEL = "meta-llama/llama-4-maverick"
-DEFAULT_MODE = "cheap"
 RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
 
 _log = logging.getLogger("mcko.geometry_solver")
@@ -32,28 +31,39 @@ JSON_SCHEMA_NOTE = (
 )
 
 KIMI_SYSTEM_PROMPT = (
-    "You are the primary geometry and stereometry solver. "
-    "Reason as fully as needed internally, but output only strict JSON. "
-    "Prioritize correct interpretation of the problem and image over speed. "
-    "Do not invent objects or relations. "
-    "If the problem is solvable, final_answer.value must be non-empty and contain the answer only. "
+    "You are the primary solver for mixed user tasks from text and images. "
+    "Reason as fully as needed internally before deciding on the answer. "
+    "Prioritize correct interpretation of the source over speed. "
+    "Handle any domain, not only mathematics. "
+    "If several independent tasks are present, solve all of them in source order. "
+    "Do not let the requirement of concise final output reduce reasoning quality. "
+    "If the task is solvable, final_answer.value must contain only the final answer content. "
+    "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
     + JSON_SCHEMA_NOTE
 )
 
 QWEN_SYSTEM_PROMPT = (
-    "You are the parser and visual verifier for geometry and stereometry tasks. "
-    "Extract OCR text, entities, relations, givens, target, and ambiguities. "
+    "You are the parser and extractor for mixed user tasks from text and images. "
+    "Extract OCR text, task boundaries, entities, relations, givens, targets, and ambiguities. "
+    "Handle any domain, not only mathematics. "
+    "If several independent tasks are present, preserve their order. "
     "Do not optimize for solving. Lower confidence instead of guessing. "
     "Leave final_answer empty unless the answer is explicitly printed in the source itself. "
     + JSON_SCHEMA_NOTE
 )
 
 LLAMA_SYSTEM_PROMPT = (
-    "You are the independent verifier for geometry and stereometry tasks. "
-    "Re-check interpretation, givens, target, reasoning, and final answer. "
-    "Do not blindly copy the proposed answer. "
+    "You are the independent verifier for mixed user tasks from text and images. "
+    "Re-check interpretation, target, reasoning, and final answer without blindly copying the proposed result. "
+    "Handle any domain, not only mathematics. "
+    "If several independent tasks are present, verify all of them in source order. "
+    "Do not let the requirement of concise final output reduce reasoning quality. "
     + JSON_SCHEMA_NOTE
 )
+
+
+class RecoverableProviderError(RuntimeError):
+    """Provider failure that parser/verifier may degrade around."""
 
 
 class GeometryPhotoSolver:
@@ -63,16 +73,13 @@ class GeometryPhotoSolver:
         kimi_model: str = DEFAULT_KIMI_MODEL,
         qwen_model: str = DEFAULT_QWEN_MODEL,
         llama_model: str = DEFAULT_LLAMA_MODEL,
-        mode: str = DEFAULT_MODE,
     ):
         self.api_key = api_key
         self.kimi_model = kimi_model
         self.qwen_model = qwen_model
         self.llama_model = llama_model
-        self.mode = mode if mode in ("cheap", "accurate") else DEFAULT_MODE
         _log.info(
-            "GeometryPhotoSolver initialized: mode=%s kimi=%s qwen=%s llama=%s",
-            self.mode,
+            "GeometryPhotoSolver initialized: kimi=%s qwen=%s llama=%s",
             self.kimi_model,
             self.qwen_model,
             self.llama_model,
@@ -83,16 +90,11 @@ class GeometryPhotoSolver:
         if not image_urls and not user_text.strip():
             return "1) Не удалось определить ответ"
 
-        preprocessed = self._prepare_variants(image_urls[0]) if image_urls else {
-            "full_image": None,
-            "text_crop": None,
-            "diagram_crop": None,
-        }
+        preprocessed = self._prepare_variants(image_urls)
         _log.info(
-            "Prepared request variants: has_image=%s text_crop=%s diagram_crop=%s",
-            bool(image_urls),
-            preprocessed.get("text_crop") is not None,
-            preprocessed.get("diagram_crop") is not None,
+            "Prepared request variants: image_count=%d auxiliary_crops=%d",
+            len(preprocessed),
+            len([variant for variant in preprocessed if variant.get("text_crop") or variant.get("diagram_crop")]),
         )
 
         qwen_result = self._call_qwen(preprocessed, user_text)
@@ -129,81 +131,106 @@ class GeometryPhotoSolver:
                     text_parts.append(text)
         return image_urls, "\n".join(text_parts)
 
-    def _prepare_variants(self, image_url: str) -> Dict[str, Optional[str]]:
-        variants = {
-            "full_image": image_url,
-            "text_crop": None,
-            "diagram_crop": None,
-        }
-        image_bytes = self._data_url_to_bytes(image_url)
-        if image_bytes is None:
-            _log.warning("Could not decode image data URL, using full image only")
-            return variants
+    def _prepare_variants(self, image_urls: List[str]) -> List[Dict[str, Optional[str]]]:
+        prepared = []
+        for index, image_url in enumerate(image_urls, start=1):
+            variants = {
+                "full_image": image_url,
+                "text_crop": None,
+                "diagram_crop": None,
+            }
+            image_bytes = self._data_url_to_bytes(image_url)
+            if image_bytes is None:
+                _log.warning("Could not decode image data URL for image %d, using full image only", index)
+                prepared.append(variants)
+                continue
 
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                image = img.convert("RGB")
-                width, height = image.size
-                _log.info("Preparing image variants: width=%d height=%d", width, height)
-                if height >= int(width * 1.15) and height >= 300:
-                    split_y = int(height * 0.45)
-                    text_crop = image.crop((0, 0, width, split_y))
-                    diagram_crop = image.crop((0, split_y, width, height))
-                    variants["text_crop"] = self._image_to_data_url(text_crop)
-                    variants["diagram_crop"] = self._image_to_data_url(diagram_crop)
-        except Exception as exc:
-            _log.error("Image preprocessing failed: %s", exc)
-        return variants
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    image = img.convert("RGB")
+                    width, height = image.size
+                    _log.info("Preparing image variants: image=%d width=%d height=%d", index, width, height)
+                    if height >= int(width * 1.15) and height >= 300:
+                        split_y = int(height * 0.45)
+                        text_crop = image.crop((0, 0, width, split_y))
+                        diagram_crop = image.crop((0, split_y, width, height))
+                        variants["text_crop"] = self._image_to_data_url(text_crop)
+                        variants["diagram_crop"] = self._image_to_data_url(diagram_crop)
+            except Exception as exc:
+                _log.error("Image preprocessing failed for image %d: %s", index, exc)
+            prepared.append(variants)
+        return prepared
 
-    def _call_qwen(self, variants: Dict[str, Optional[str]], user_text: str) -> Dict:
+    def _call_qwen(self, variants: List[Dict[str, Optional[str]]], user_text: str) -> Dict:
         user_content = self._build_qwen_content(variants, user_text)
         try:
             result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
             return self._normalize_result(result, role="parser")
-        except RuntimeError as exc:
+        except RecoverableProviderError as exc:
             _log.warning("Qwen parser unavailable, using degraded parser fallback: %s", exc)
             return self._fallback_parser_result(user_text, variants)
 
     def _call_kimi(
         self,
-        variants: Dict[str, Optional[str]],
+        variants: List[Dict[str, Optional[str]]],
         user_text: str,
         qwen_result: Dict,
         mismatch_summary: Optional[str],
     ) -> Dict:
         user_content = self._build_kimi_content(variants, user_text, qwen_result, mismatch_summary)
-        result = self._request_json(self.kimi_model, KIMI_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result, role="solver")
+        try:
+            result = self._request_json(self.kimi_model, KIMI_SYSTEM_PROMPT, user_content)
+            return self._normalize_result(result, role="solver")
+        except RecoverableProviderError as exc:
+            _log.warning("Kimi primary solver unavailable, trying degraded solver fallback: %s", exc)
+            if self.llama_model != self.kimi_model:
+                try:
+                    result = self._request_json(self.llama_model, KIMI_SYSTEM_PROMPT, user_content)
+                    normalized = self._normalize_result(result, role="solver")
+                    ambiguities = normalized["visual_interpretation"].get("possible_ambiguities") or []
+                    ambiguities.append("primary solver unavailable")
+                    ambiguities.append("solver used verifier model")
+                    normalized["visual_interpretation"]["possible_ambiguities"] = ambiguities
+                    normalized["needs_clarification"] = True
+                    return normalized
+                except RecoverableProviderError as degraded_exc:
+                    _log.warning("Degraded solver fallback via verifier model failed: %s", degraded_exc)
+            return self._fallback_solver_result(user_text, qwen_result)
 
     def _call_llama(
         self,
-        variants: Dict[str, Optional[str]],
+        variants: List[Dict[str, Optional[str]]],
         user_text: str,
         qwen_result: Dict,
         kimi_result: Dict,
         mismatch_summary: Optional[str],
     ) -> Dict:
+        ambiguities = (kimi_result.get("visual_interpretation") or {}).get("possible_ambiguities") or []
+        if "solver used verifier model" in ambiguities:
+            _log.warning("Skipping verifier request because llama already served as degraded solver")
+            return self._fallback_verifier_result(kimi_result)
         user_content = self._build_llama_content(variants, user_text, qwen_result, kimi_result, mismatch_summary)
         try:
             result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content)
             return self._normalize_result(result, role="verifier")
-        except RuntimeError as exc:
+        except RecoverableProviderError as exc:
             _log.warning("Llama verifier unavailable, using degraded verifier fallback: %s", exc)
             return self._fallback_verifier_result(kimi_result)
 
-    def _build_qwen_content(self, variants: Dict[str, Optional[str]], user_text: str) -> List[Dict]:
-        has_image = bool(variants.get("full_image"))
+    def _build_qwen_content(self, variants: List[Dict[str, Optional[str]]], user_text: str) -> List[Dict]:
+        has_image = bool(variants)
         if has_image:
             text_prompt = (
-                "Parse this geometry photo into strict JSON.\n"
-                "Extract OCR text, entities, relations, givens, target, ambiguities, and confidence.\n"
-                "Normalize labels and spatial relations. Do not solve unless needed for normalization.\n"
+                "Parse the attached task materials into strict JSON.\n"
+                "Extract OCR text, task boundaries, entities, relations, givens, targets, ambiguities, and confidence.\n"
+                "The images may contain one task or several independent tasks. Preserve their order.\n"
+                "Do not solve unless needed for normalization.\n"
                 "%s" % JSON_SCHEMA_NOTE
             )
         else:
             text_prompt = (
-                "Parse this geometry or stereometry problem text into strict JSON.\n"
-                "Extract givens, target, inferred entities, relations, ambiguities, and confidence.\n"
+                "Parse the user text task into strict JSON.\n"
+                "Extract task boundaries, givens, target, inferred entities, relations, ambiguities, and confidence.\n"
                 "Do not optimize for solving.\n"
                 "%s" % JSON_SCHEMA_NOTE
             )
@@ -216,25 +243,27 @@ class GeometryPhotoSolver:
 
     def _build_kimi_content(
         self,
-        variants: Dict[str, Optional[str]],
+        variants: List[Dict[str, Optional[str]]],
         user_text: str,
         qwen_result: Dict,
         mismatch_summary: Optional[str],
     ) -> List[Dict]:
-        has_image = bool(variants.get("full_image"))
+        has_image = bool(variants)
         if has_image:
             prompt = (
-                "Solve the geometry problem from the image and return strict JSON.\n"
-                "Use the Qwen visual parse as a helper, but correct it if the image clearly disagrees.\n"
-                "Prioritize correct diagram interpretation over aggressive solving.\n"
+                "Solve the user task from the attached text and images and return strict JSON.\n"
+                "Use the Qwen parse as a helper, but correct it if the source clearly disagrees.\n"
+                "The materials may contain several independent tasks; solve all of them in source order.\n"
+                "Prioritize correct interpretation over aggressive solving.\n"
                 "Keep full reasoning inside solution_steps and reasoning_summary.\n"
                 "%s\n" % JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
-                "Solve the geometry or stereometry problem from text and return strict JSON.\n"
+                "Solve the user text task and return strict JSON.\n"
                 "Use the Qwen parse as a helper, but reason independently.\n"
-                "Prioritize faithful interpretation of givens and target.\n"
+                "If several independent tasks are present, solve all of them in order.\n"
+                "Prioritize faithful interpretation of the source.\n"
                 "Keep full reasoning inside solution_steps and reasoning_summary.\n"
                 "%s\n" % JSON_SCHEMA_NOTE
             )
@@ -250,25 +279,25 @@ class GeometryPhotoSolver:
 
     def _build_llama_content(
         self,
-        variants: Dict[str, Optional[str]],
+        variants: List[Dict[str, Optional[str]]],
         user_text: str,
         qwen_result: Dict,
         kimi_result: Dict,
         mismatch_summary: Optional[str],
     ) -> List[Dict]:
-        has_image = bool(variants.get("full_image"))
+        has_image = bool(variants)
         if has_image:
             prompt = (
-                "Verify the geometry problem from the image and return strict JSON.\n"
-                "Check the diagram interpretation, givens, target, and final answer.\n"
+                "Verify the user task from the attached text and images and return strict JSON.\n"
+                "Check the interpretation, targets, and final answer for all tasks in order.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
                 "Keep full reasoning inside solution_steps and reasoning_summary.\n"
                 "%s\n" % JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
-                "Verify the geometry or stereometry problem from text and return strict JSON.\n"
-                "Check givens, target, reasoning, and final answer.\n"
+                "Verify the user text task and return strict JSON.\n"
+                "Check the target, reasoning, and final answer.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
                 "Keep full reasoning inside solution_steps and reasoning_summary.\n"
                 "%s\n" % JSON_SCHEMA_NOTE
@@ -284,16 +313,18 @@ class GeometryPhotoSolver:
         content.extend(self._build_image_blocks(variants))
         return content
 
-    def _build_image_blocks(self, variants: Dict[str, Optional[str]]) -> List[Dict]:
+    def _build_image_blocks(self, variants: List[Dict[str, Optional[str]]]) -> List[Dict]:
         content = []
-        if variants.get("full_image"):
-            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
-        if variants.get("text_crop"):
-            content.append({"type": "text", "text": "Auxiliary crop: likely problem text region."})
-            content.append({"type": "image_url", "image_url": {"url": variants["text_crop"]}})
-        if variants.get("diagram_crop"):
-            content.append({"type": "text", "text": "Auxiliary crop: likely diagram region."})
-            content.append({"type": "image_url", "image_url": {"url": variants["diagram_crop"]}})
+        for index, variant in enumerate(variants, start=1):
+            if variant.get("full_image"):
+                content.append({"type": "text", "text": "Source image %d." % index})
+                content.append({"type": "image_url", "image_url": {"url": variant["full_image"]}})
+            if variant.get("text_crop"):
+                content.append({"type": "text", "text": "Auxiliary crop for image %d: likely text region." % index})
+                content.append({"type": "image_url", "image_url": {"url": variant["text_crop"]}})
+            if variant.get("diagram_crop"):
+                content.append({"type": "text", "text": "Auxiliary crop for image %d: likely lower region or diagram." % index})
+                content.append({"type": "image_url", "image_url": {"url": variant["diagram_crop"]}})
         return content
 
     def _request_json(self, model: str, system_prompt: str, user_content: List[Dict]) -> Dict:
@@ -309,7 +340,7 @@ class GeometryPhotoSolver:
             "response_format": {"type": "json_object"},
             "provider": {"allow_fallbacks": True},
         }
-        _log.info("Requesting geometry JSON: model=%s blocks=%d", model, len(user_content))
+        _log.info("Requesting task JSON: model=%s blocks=%d", model, len(user_content))
         response = None
         last_error = None
         for attempt in range(1, 3):
@@ -326,51 +357,56 @@ class GeometryPhotoSolver:
                 )
             except requests.Timeout as exc:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
-                last_error = RuntimeError("[Таймаут OpenRouter: модель %s не ответила вовремя]" % model)
-                _log.error("Geometry solver timeout: model=%s attempt=%d elapsed_ms=%d timeout=%s error=%s", model, attempt, elapsed_ms, REQUEST_TIMEOUT, exc)
+                last_error = RecoverableProviderError("[Таймаут OpenRouter: модель %s не ответила вовремя]" % model)
+                _log.error("Task solver timeout: model=%s attempt=%d elapsed_ms=%d timeout=%s error=%s", model, attempt, elapsed_ms, REQUEST_TIMEOUT, exc)
                 if attempt < 2:
                     self._sleep_before_retry(attempt)
                     continue
                 raise last_error
             except requests.RequestException as exc:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
-                last_error = RuntimeError("[Ошибка сети OpenRouter: %s]" % exc)
-                _log.error("Geometry solver request failed: model=%s attempt=%d elapsed_ms=%d error=%s", model, attempt, elapsed_ms, exc)
+                last_error = RecoverableProviderError("[Ошибка сети OpenRouter: %s]" % exc)
+                _log.error("Task solver request failed: model=%s attempt=%d elapsed_ms=%d error=%s", model, attempt, elapsed_ms, exc)
                 if attempt < 2:
                     self._sleep_before_retry(attempt)
                     continue
                 raise last_error
 
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            _log.info("Geometry solver HTTP response: model=%s attempt=%d status=%d elapsed_ms=%d", model, attempt, response.status_code, elapsed_ms)
+            _log.info("Task solver HTTP response: model=%s attempt=%d status=%d elapsed_ms=%d", model, attempt, response.status_code, elapsed_ms)
             if response.ok:
                 break
 
             body = response.text[:500]
             request_id = response.headers.get("x-request-id") or response.headers.get("cf-ray") or "-"
-            _log.error("Geometry solver API error: model=%s attempt=%d status=%d request_id=%s body=%s", model, attempt, response.status_code, request_id, body)
-            last_error = RuntimeError("[Ошибка API %d: %s]" % (response.status_code, body))
+            _log.error("Task solver API error: model=%s attempt=%d status=%d request_id=%s body=%s", model, attempt, response.status_code, request_id, body)
+            last_error = RecoverableProviderError("[Ошибка API %d: %s]" % (response.status_code, body))
             if self._is_retryable_status(response.status_code) and attempt < 2:
                 self._sleep_before_retry(attempt)
                 continue
             raise last_error
 
         if response is None:
-            raise last_error or RuntimeError("[Ошибка API: пустой ответ]")
+            raise last_error or RecoverableProviderError("[Ошибка API: пустой ответ]")
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RecoverableProviderError("[Ошибка API: невалидный JSON от %s]" % model) from exc
+
         message = (data.get("choices") or [{}])[0].get("message") or {}
-        raw_text = message.get("content")
-        if raw_text is None:
-            raw_text = message.get("reasoning") or ""
+        raw_text = self._message_to_text(message)
         try:
             parsed = self._extract_json_object(raw_text)
         except ValueError as exc:
-            _log.warning("Primary JSON parse failed for model=%s: %s", model, exc)
-            repaired_text = self._repair_non_json_response(model, raw_text)
-            parsed = self._extract_json_object(repaired_text)
+            _log.warning("Primary JSON parse failed for model=%s chars=%d: %s", model, len(raw_text), exc)
+            try:
+                repaired_text = self._repair_non_json_response(model, raw_text)
+                parsed = self._extract_json_object(repaired_text)
+            except ValueError as repair_exc:
+                raise RecoverableProviderError("[Ошибка JSON: модель %s вернула невалидный ответ]" % model) from repair_exc
             _log.info("JSON repair pass validated successfully: model=%s chars=%d", model, len(repaired_text))
-        _log.info("Geometry JSON parsed: model=%s chars=%d", model, len(raw_text))
+        _log.info("Task JSON parsed: model=%s chars=%d", model, len(raw_text))
         return parsed
 
     def _is_retryable_status(self, status_code: int) -> bool:
@@ -410,14 +446,19 @@ class GeometryPhotoSolver:
         if not response.ok:
             body = response.text[:300]
             raise ValueError("JSON repair failed: %s" % body)
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ValueError("JSON repair returned invalid API payload") from exc
         message = (data.get("choices") or [{}])[0].get("message") or {}
-        repaired_text = message.get("content") or ""
+        repaired_text = self._message_to_text(message)
+        if not repaired_text.strip():
+            raise ValueError("JSON repair returned empty content")
         return repaired_text
 
     def _normalize_result(self, raw: Dict, role: str = "generic") -> Dict:
         result = {
-            "task_type": raw.get("task_type") or "geometry_photo",
+            "task_type": raw.get("task_type") or "mixed_task",
             "ocr_text": raw.get("ocr_text") or "",
             "normalized_problem_text": raw.get("normalized_problem_text") or "",
             "diagram_entities": self._normalize_entities(raw.get("diagram_entities") or raw.get("objects") or []),
@@ -463,12 +504,12 @@ class GeometryPhotoSolver:
 
         return result
 
-    def _fallback_parser_result(self, user_text: str, variants: Dict[str, Optional[str]]) -> Dict:
+    def _fallback_parser_result(self, user_text: str, variants: List[Dict[str, Optional[str]]]) -> Dict:
         summary = "Parser fallback used because Qwen was temporarily unavailable."
-        if variants.get("full_image"):
-            summary += " The image should still be checked directly by Kimi and Llama."
+        if variants:
+            summary += " The attached images should still be checked directly by Kimi and Llama."
         return {
-            "task_type": "geometry_photo",
+            "task_type": "mixed_task",
             "ocr_text": user_text or "",
             "normalized_problem_text": user_text or "",
             "diagram_entities": [],
@@ -491,7 +532,7 @@ class GeometryPhotoSolver:
     def _fallback_verifier_result(self, kimi_result: Dict) -> Dict:
         final_answer = kimi_result.get("final_answer") or {"value": "", "format": "text"}
         return {
-            "task_type": kimi_result.get("task_type") or "geometry_photo",
+            "task_type": kimi_result.get("task_type") or "mixed_task",
             "ocr_text": kimi_result.get("ocr_text") or "",
             "normalized_problem_text": kimi_result.get("normalized_problem_text") or "",
             "diagram_entities": kimi_result.get("diagram_entities") or [],
@@ -508,6 +549,35 @@ class GeometryPhotoSolver:
             "final_answer": {
                 "value": str(final_answer.get("value") or ""),
                 "format": str(final_answer.get("format") or "text"),
+            },
+            "answer_confidence": 0.0,
+            "consistency_checks": [],
+            "needs_clarification": True,
+        }
+
+    def _fallback_solver_result(self, user_text: str, qwen_result: Dict) -> Dict:
+        final_answer = (qwen_result.get("final_answer") or {}).get("value", "")
+        ambiguities = ["primary solver unavailable"]
+        qwen_ambiguities = (qwen_result.get("visual_interpretation") or {}).get("possible_ambiguities") or []
+        ambiguities.extend([item for item in qwen_ambiguities if item not in ambiguities])
+        return {
+            "task_type": qwen_result.get("task_type") or "mixed_task",
+            "ocr_text": qwen_result.get("ocr_text") or user_text or "",
+            "normalized_problem_text": qwen_result.get("normalized_problem_text") or user_text or "",
+            "diagram_entities": qwen_result.get("diagram_entities") or [],
+            "diagram_relations": qwen_result.get("diagram_relations") or [],
+            "givens": qwen_result.get("givens") or [],
+            "target": qwen_result.get("target") or {"statement": ""},
+            "visual_interpretation": {
+                "summary": "Solver fallback used because Kimi was temporarily unavailable.",
+                "confidence": 0.0,
+                "possible_ambiguities": ambiguities,
+            },
+            "reasoning_summary": [],
+            "solution_steps": [],
+            "final_answer": {
+                "value": str(final_answer or ""),
+                "format": "text",
             },
             "answer_confidence": 0.0,
             "consistency_checks": [],
@@ -637,15 +707,92 @@ class GeometryPhotoSolver:
         return "\n".join([part for part in parts if part.strip()])
 
     def _format_user_result(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
-        final_answer = kimi["final_answer"].get("value", "").strip()
-        if not final_answer and llama is not None:
-            final_answer = llama["final_answer"].get("value", "").strip()
-        if not final_answer:
-            final_answer = qwen["final_answer"].get("value", "").strip()
+        final_answer = self._pick_user_answer(consensus, kimi, qwen, llama)
         if final_answer:
-            return "1) %s" % final_answer
+            _log.info(
+                "Returning user answer: status=%s score=%.3f answer=%s",
+                consensus["status"],
+                consensus["score"],
+                final_answer,
+            )
+            return self._render_answer_only(final_answer)
 
+        _log.warning(
+            "No safe final answer after consensus: status=%s score=%.3f reasons=%s",
+            consensus["status"],
+            consensus["score"],
+            ", ".join(consensus.get("reasons") or []) or "-",
+        )
         return "1) Не удалось определить ответ"
+
+    def _pick_user_answer(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
+        kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
+        llama_answer = ""
+        if llama is not None:
+            llama_answer = (llama.get("final_answer") or {}).get("value", "").strip()
+
+        if consensus["status"] == "accepted":
+            return kimi_answer or llama_answer
+
+        answers_match = bool(kimi_answer) and self._normalize_text(kimi_answer) == self._normalize_text(llama_answer)
+        parser_unavailable = "parser unavailable" in (qwen.get("visual_interpretation") or {}).get("possible_ambiguities", [])
+        verifier_unavailable = bool(
+            llama and "verifier unavailable" in (llama.get("visual_interpretation") or {}).get("possible_ambiguities", [])
+        )
+
+        if answers_match:
+            _log.info("Accepting answer despite non-accepted consensus because Kimi and Llama agree")
+            return kimi_answer
+
+        if kimi_answer and verifier_unavailable:
+            _log.info("Accepting Kimi answer because verifier is unavailable")
+            return kimi_answer
+
+        if kimi_answer and consensus["status"] == "self_check" and not parser_unavailable and not qwen.get("needs_clarification"):
+            _log.info("Accepting Kimi answer after self-check because parser did not report unresolved ambiguity")
+            return kimi_answer
+
+        return ""
+
+    def _render_answer_only(self, final_answer: str) -> str:
+        answer = (final_answer or "").strip()
+        if not answer:
+            return "1) Не удалось определить ответ"
+        if re.match(r"^\d+\)\s*", answer):
+            return answer
+        lines = [line.strip() for line in answer.splitlines() if line.strip()]
+        if len(lines) > 1:
+            return "\n".join(["%d) %s" % (index, line) for index, line in enumerate(lines, start=1)])
+        return "1) %s" % answer
+
+    def _message_to_text(self, message: Dict) -> str:
+        content = message.get("content")
+        text = self._coerce_message_content(content)
+        if text:
+            return text
+        reasoning = message.get("reasoning")
+        return self._coerce_message_content(reasoning)
+
+    def _coerce_message_content(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if text:
+                        parts.append(str(text))
+            return "\n".join([part for part in parts if part])
+        if isinstance(value, dict):
+            text = value.get("text")
+            if text:
+                return str(text)
+        return str(value)
 
     def _extract_json_object(self, raw_text: str) -> Dict:
         text = self._strip_json_wrappers(raw_text)
@@ -735,9 +882,7 @@ class GeometryPhotoSolver:
 
     def _repair_json(self, text: str) -> str:
         repaired = text
-        # Remove trailing commas before closing braces/brackets.
         repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
-        # Close obviously unterminated braces/brackets.
         open_braces = repaired.count("{")
         close_braces = repaired.count("}")
         if close_braces < open_braces:

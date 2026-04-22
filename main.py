@@ -30,7 +30,6 @@ def main():
         kimi_model=config.photo_solver_kimi_model,
         qwen_model=config.photo_solver_qwen_model,
         llama_model=config.photo_solver_llama_model,
-        mode=config.photo_solver_mode,
     )
     session = Session()
     logger.info("Core components initialized")
