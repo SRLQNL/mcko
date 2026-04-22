@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import time
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -13,7 +14,7 @@ from PIL import Image
 from app.logger import logger
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-REQUEST_TIMEOUT = (20, 180)
+REQUEST_TIMEOUT = (20, 90)
 JSON_MAX_TOKENS = 2200
 
 DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
@@ -296,15 +297,28 @@ class GeometryPhotoSolver:
             "provider": {"allow_fallbacks": True},
         }
         _log.info("Requesting geometry JSON: model=%s blocks=%d", model, len(user_content))
-        response = requests.post(
-            ENDPOINT,
-            headers={
-                "Authorization": "Bearer %s" % self.api_key,
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
+        started_at = time.monotonic()
+        try:
+            response = requests.post(
+                ENDPOINT,
+                headers={
+                    "Authorization": "Bearer %s" % self.api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.Timeout as exc:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            _log.error("Geometry solver timeout: model=%s elapsed_ms=%d timeout=%s error=%s", model, elapsed_ms, REQUEST_TIMEOUT, exc)
+            raise RuntimeError("[Таймаут OpenRouter: модель %s не ответила вовремя]" % model)
+        except requests.RequestException as exc:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            _log.error("Geometry solver request failed: model=%s elapsed_ms=%d error=%s", model, elapsed_ms, exc)
+            raise RuntimeError("[Ошибка сети OpenRouter: %s]" % exc)
+
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        _log.info("Geometry solver HTTP response: model=%s status=%d elapsed_ms=%d", model, response.status_code, elapsed_ms)
         if not response.ok:
             body = response.text[:500]
             request_id = response.headers.get("x-request-id") or response.headers.get("cf-ray") or "-"

@@ -89,40 +89,44 @@ def main():
             logger.info("Starting response worker: has_images=%s", has_images)
             full_text = ""
             had_stream_error = False
-            result = geometry_solver.solve_content_blocks(content_blocks)
-            if isinstance(result, str):
-                # Error string
-                root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
-                if result.startswith("[Ошибка ") or result.startswith("\n[Ошибка "):
-                    had_stream_error = True
-                else:
-                    full_text = result
-            else:
-                for chunk in result:
-                    if _is_api_error_text(chunk):
+            try:
+                result = geometry_solver.solve_content_blocks(content_blocks)
+                if isinstance(result, str):
+                    root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
+                    if result.startswith("[Ошибка ") or result.startswith("\n[Ошибка "):
                         had_stream_error = True
+                    else:
+                        full_text = result
+                else:
+                    for chunk in result:
+                        if _is_api_error_text(chunk):
+                            had_stream_error = True
+                            root.after(0, lambda t=chunk: chat_window.chat_view.append_assistant_chunk(t))
+                            continue
+                        full_text += chunk
                         root.after(0, lambda t=chunk: chat_window.chat_view.append_assistant_chunk(t))
-                        continue
-                    full_text += chunk
-                    root.after(0, lambda t=chunk: chat_window.chat_view.append_assistant_chunk(t))
+            except Exception as exc:
+                had_stream_error = True
+                logger.error("Response worker failed: %s", exc, exc_info=True)
+                error_text = "[Ошибка: %s]" % exc
+                root.after(0, lambda t=error_text: chat_window.chat_view.append_assistant_chunk(t))
+            finally:
+                root.after(0, chat_window.chat_view.end_assistant)
+                if full_text:
+                    session.add_assistant(full_text)
+                    logger.info(
+                        "Streaming response complete: %d chars (stream_error=%s)",
+                        len(full_text),
+                        had_stream_error,
+                    )
+                else:
+                    logger.warning("Assistant response was not added to session due to API/stream error")
 
-            root.after(0, chat_window.chat_view.end_assistant)
-            if full_text:
-                session.add_assistant(full_text)
-                logger.info(
-                    "Streaming response complete: %d chars (stream_error=%s)",
-                    len(full_text),
-                    had_stream_error,
-                )
-            else:
-                logger.warning("Assistant response was not added to session due to API/stream error")
+                def _reenable():
+                    chat_window._input_field.configure(state="normal")
+                    chat_window._input_field.focus()
 
-            # Re-enable input and refocus
-            def _reenable():
-                chat_window._input_field.configure(state="normal")
-                chat_window._input_field.focus()
-
-            root.after(0, _reenable)
+                root.after(0, _reenable)
 
         t = threading.Thread(target=_stream_in_thread, daemon=True, name="stream-response")
         t.start()
