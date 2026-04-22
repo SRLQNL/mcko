@@ -114,14 +114,18 @@
 -------------------
 
   OPENROUTER_API_KEY    API-ключ (получить на https://openrouter.ai/keys)
-  OPENROUTER_MODEL      Модель, например: openai/gpt-4o, google/gemini-pro
-  SYSTEM_PROMPT_1       Системный промпт для окна чата
-  SYSTEM_PROMPT_2       Системный промпт для фонового запроса
+  PHOTO_SOLVER_KIMI_MODEL   primary solver (по умолчанию: moonshotai/kimi-k2.6)
+  PHOTO_SOLVER_QWEN_MODEL   parser / OCR / visual extraction
+  PHOTO_SOLVER_LLAMA_MODEL  verifier
   HOTKEY_WINDOW         Переключить окно (по умолчанию: <ctrl>+<space>)
   HOTKEY_SHOW           Только показать окно (по умолчанию: <ctrl>+<shift>+<space>)
   HOTKEY_CLIPBOARD      Хоткей буфера (по умолчанию: <ctrl>+<alt>+<space>)
+  HOTKEY_SCREENSHOT     Хоткей скриншота (по умолчанию: <ctrl>+<shift>+s)
 
   Формат хоткеев (pynput): <ctrl>, <alt>, <shift>, <space>, <f1>...<f12>, a...z
+
+Все runtime-задачи решаются через трёхмодельный GeometryPhotoSolver.
+Legacy-переменные OPENROUTER_MODEL / OPENROUTER_MODELS / SYSTEM_PROMPT_1 / SYSTEM_PROMPT_2 больше не используются.
 
 После изменения .env перезапустите приложение (kill + bash run.sh).
 
@@ -153,7 +157,7 @@ watchdog автоматически перезапустит его через 3
   .env            — конфигурация (заполняется вручную)
   .env.example    — шаблон конфигурации
   mcko.log        — журнал событий (создаётся автоматически)
-  app/            — логика: API, хоткеи, буфер обмена, история
+  app/            — логика: geometry solver, хоткеи, буфер обмена, история
   ui/             — интерфейс: окно, область чата, поле ввода
 
 ================================================================================

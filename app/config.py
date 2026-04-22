@@ -16,7 +16,6 @@ DEFAULTS = {
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
     "HOTKEY_SCREENSHOT": "<ctrl>+<shift>+s",
-    "PHOTO_SOLVER_MODE": "cheap",
     "PHOTO_SOLVER_KIMI_MODEL": "moonshotai/kimi-k2.6",
     "PHOTO_SOLVER_QWEN_MODEL": "qwen/qwen2.5-vl-72b-instruct",
     "PHOTO_SOLVER_LLAMA_MODEL": "meta-llama/llama-4-maverick",
@@ -30,7 +29,6 @@ class Config:
         self.hotkey_show: str = ""
         self.hotkey_clipboard: str = ""
         self.hotkey_screenshot: str = ""
-        self.photo_solver_mode: str = ""
         self.photo_solver_kimi_model: str = ""
         self.photo_solver_qwen_model: str = ""
         self.photo_solver_llama_model: str = ""
@@ -66,18 +64,16 @@ class Config:
         self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
         self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
         self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
-        self.photo_solver_mode = self._env_or_default("PHOTO_SOLVER_MODE")
         self.photo_solver_kimi_model = self._env_or_default("PHOTO_SOLVER_KIMI_MODEL")
         self.photo_solver_qwen_model = self._env_or_default("PHOTO_SOLVER_QWEN_MODEL")
         self.photo_solver_llama_model = self._env_or_default("PHOTO_SOLVER_LLAMA_MODEL")
 
         logger.info(
-            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, photo_solver_mode=%s, kimi=%s, qwen=%s, llama=%s",
+            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, kimi=%s, qwen=%s, llama=%s",
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
             self.hotkey_screenshot,
-            self.photo_solver_mode,
             self.photo_solver_kimi_model,
             self.photo_solver_qwen_model,
             self.photo_solver_llama_model,
