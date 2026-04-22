@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import List
 from app.logger import logger
 
 try:
@@ -13,8 +12,6 @@ except ModuleNotFoundError:
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
 DEFAULTS = {
-    "SYSTEM_PROMPT_1": "Ты полезный AI-ассистент. Отвечай кратко и по делу.",
-    "SYSTEM_PROMPT_2": "Обработай содержимое буфера обмена и дай краткий полезный ответ.",
     "HOTKEY_WINDOW": "<ctrl>+<space>",
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
@@ -29,10 +26,6 @@ DEFAULTS = {
 class Config:
     def __init__(self):
         self.api_key: str = ""
-        self.model: str = ""
-        self.models: List[str] = []
-        self.system_prompt_1: str = ""
-        self.system_prompt_2: str = ""
         self.hotkey_window: str = ""
         self.hotkey_show: str = ""
         self.hotkey_clipboard: str = ""
@@ -69,10 +62,6 @@ class Config:
             self.api_key[-4:],
             len(self.api_key),
         )
-        self.model = os.environ.get("OPENROUTER_MODEL", "").strip()
-        self.models = self._load_models()
-        self.system_prompt_1 = self._env_or_default("SYSTEM_PROMPT_1")
-        self.system_prompt_2 = self._env_or_default("SYSTEM_PROMPT_2")
         self.hotkey_window = self._env_or_default("HOTKEY_WINDOW")
         self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
         self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
@@ -83,14 +72,15 @@ class Config:
         self.photo_solver_llama_model = self._env_or_default("PHOTO_SOLVER_LLAMA_MODEL")
 
         logger.info(
-            "Config loaded: model=%s, models=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, photo_solver_mode=%s",
-            self.model or "-",
-            ",".join(self.models) if self.models else "-",
+            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, photo_solver_mode=%s, kimi=%s, qwen=%s, llama=%s",
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
             self.hotkey_screenshot,
             self.photo_solver_mode,
+            self.photo_solver_kimi_model,
+            self.photo_solver_qwen_model,
+            self.photo_solver_llama_model,
         )
 
     def _normalize_secret(self, value: str) -> str:
@@ -112,32 +102,6 @@ class Config:
     def _env_or_default(self, key: str) -> str:
         value = os.environ.get(key, "").strip()
         return value or DEFAULTS[key]
-
-    def _load_models(self) -> List[str]:
-        raw_models = os.environ.get("OPENROUTER_MODELS", "").strip()
-        if raw_models:
-            models = self._parse_model_list(raw_models)
-            if models:
-                self.model = models[0]
-                logger.info("Loaded model pool from OPENROUTER_MODELS: %s", ",".join(models))
-                return models
-            logger.warning("OPENROUTER_MODELS is set but no valid model slugs were parsed")
-
-        if self.model:
-            logger.info("Using single model from OPENROUTER_MODEL: %s", self.model)
-            return [self.model]
-
-        logger.warning("No OPENROUTER_MODEL/OPENROUTER_MODELS configured; text-only chat model is disabled")
-        self.model = ""
-        return []
-
-    def _parse_model_list(self, raw_value: str) -> List[str]:
-        models = []
-        for chunk in raw_value.split(","):
-            model = chunk.strip()
-            if model and model not in models:
-                models.append(model)
-        return models
 
     def _load_env_fallback(self, env_path: str) -> None:
         """Minimal .env loader used when python-dotenv is unavailable."""

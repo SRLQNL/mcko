@@ -142,19 +142,16 @@ if ! grep -Eq '^[[:space:]]*OPENROUTER_API_KEY=[^[:space:]#]+' "$ENV_FILE"; then
     exit 1
 fi
 
-HAS_SINGLE_MODEL=0
-HAS_MODEL_POOL=0
-if grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE"; then
-    HAS_SINGLE_MODEL=1
-fi
-if grep -Eq '^[[:space:]]*OPENROUTER_MODELS=[^[:space:]#]+' "$ENV_FILE"; then
-    HAS_MODEL_POOL=1
-fi
+for key in PHOTO_SOLVER_KIMI_MODEL PHOTO_SOLVER_QWEN_MODEL PHOTO_SOLVER_LLAMA_MODEL; do
+    if ! grep -Eq "^[[:space:]]*$key=[^[:space:]#]+" "$ENV_FILE"; then
+        echo "[!] $key is empty in $ENV_FILE"
+        echo "[!] Fill all PHOTO_SOLVER_* models and run bash run.sh again."
+        exit 1
+    fi
+done
 
-if [ "$HAS_SINGLE_MODEL" -eq 0 ] && [ "$HAS_MODEL_POOL" -eq 0 ]; then
-    echo "[!] No OPENROUTER_MODEL/OPENROUTER_MODELS configured in $ENV_FILE"
-    echo "[!] Image solver will still use PHOTO_SOLVER_* models."
-    echo "[!] Text-only chat requests will return a configuration error until a model is set."
+if grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE" || grep -Eq '^[[:space:]]*OPENROUTER_MODELS=[^[:space:]#]+' "$ENV_FILE"; then
+    echo "[i] OPENROUTER_MODEL / OPENROUTER_MODELS are legacy settings and are ignored by the current multi-model solver."
 fi
 
 # ── Launch via watchdog ───────────────────────────────────────────────────────

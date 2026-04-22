@@ -11,8 +11,6 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from PIL import Image
 
-from app.logger import logger
-
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 90)
 JSON_MAX_TOKENS = 2200
@@ -24,22 +22,34 @@ DEFAULT_MODE = "cheap"
 
 _log = logging.getLogger("mcko.geometry_solver")
 
+JSON_SCHEMA_NOTE = (
+    'Return one valid JSON object with keys: '
+    '"task_type","ocr_text","normalized_problem_text","diagram_entities","diagram_relations",'
+    '"givens","target","visual_interpretation","reasoning_summary","solution_steps",'
+    '"final_answer","answer_confidence","consistency_checks","needs_clarification". '
+    'Use double quotes. No markdown. No prose outside JSON.'
+)
+
 KIMI_SYSTEM_PROMPT = (
-    "You solve geometry and stereometry problems from photos. Output JSON only. "
-    "Prioritize correct diagram interpretation, extract givens and target, solve carefully, "
-    "and do not invent objects or relations. If the diagram is ambiguous, report it explicitly."
+    "You are the primary geometry and stereometry solver. "
+    "Reason as fully as needed internally, but output only strict JSON. "
+    "Prioritize correct interpretation of the problem and image over speed. "
+    "Do not invent objects or relations. "
+    + JSON_SCHEMA_NOTE
 )
 
 QWEN_SYSTEM_PROMPT = (
-    "You are a visual parser for geometry photos. Output JSON only. "
-    "Extract OCR text, diagram entities, diagram relations, givens, target, and ambiguities. "
-    "Do not optimize for solving. Lower confidence instead of guessing."
+    "You are the parser and visual verifier for geometry and stereometry tasks. "
+    "Extract OCR text, entities, relations, givens, target, and ambiguities. "
+    "Do not optimize for solving. Lower confidence instead of guessing. "
+    + JSON_SCHEMA_NOTE
 )
 
 LLAMA_SYSTEM_PROMPT = (
-    "You are a verifier for geometry photo problems. Output JSON only. "
-    "Independently interpret the diagram, verify givens and target, and check the proposed solution. "
-    "Do not invent missing relations. If the image is ambiguous, report it explicitly."
+    "You are the independent verifier for geometry and stereometry tasks. "
+    "Re-check interpretation, givens, target, reasoning, and final answer. "
+    "Do not blindly copy the proposed answer. "
+    + JSON_SCHEMA_NOTE
 )
 
 
@@ -67,10 +77,8 @@ class GeometryPhotoSolver:
 
     def solve_content_blocks(self, content_blocks: List[Dict]) -> str:
         image_urls, user_text = self._extract_image_payload(content_blocks)
-        if not image_urls:
-            _log.info("Running text-only solver path with Kimi only")
-            kimi_result = self._call_kimi_text_only(user_text)
-            return self._format_text_only_result(kimi_result)
+        if not image_urls and not user_text.strip():
+            return "1) Не удалось определить ответ"
 
         preprocessed = self._prepare_variants(image_urls[0]) if image_urls else {
             "full_image": None,
@@ -86,12 +94,6 @@ class GeometryPhotoSolver:
 
         qwen_result = self._call_qwen(preprocessed, user_text)
         kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
-
-        if self.mode == "cheap" and self._can_accept_cheap(qwen_result, kimi_result):
-            consensus = self._build_cheap_consensus(qwen_result, kimi_result)
-            _log.info("Cheap mode accepted without llama: score=%.3f", consensus["score"])
-            return self._format_user_result(consensus, kimi_result, qwen_result, None)
-
         llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
         consensus = self._compare_results(kimi_result, qwen_result, llama_result)
         _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
@@ -155,21 +157,6 @@ class GeometryPhotoSolver:
         result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
         return self._normalize_result(result)
 
-    def _call_kimi_text_only(self, user_text: str) -> Dict:
-        prompt = (
-            "Solve the geometry or stereometry problem from text and return strict JSON.\n"
-            "Extract givens, target, concise reasoning, final answer, confidence, and ambiguities.\n"
-            "If the problem statement is incomplete or ambiguous, report it explicitly.\n"
-        )
-        if user_text:
-            prompt += "Problem text:\n%s" % user_text
-        result = self._request_json(
-            self.kimi_model,
-            KIMI_SYSTEM_PROMPT,
-            [{"type": "text", "text": prompt}],
-        )
-        return self._normalize_result(result)
-
     def _call_kimi(
         self,
         variants: Dict[str, Optional[str]],
@@ -199,26 +186,21 @@ class GeometryPhotoSolver:
             text_prompt = (
                 "Parse this geometry photo into strict JSON.\n"
                 "Extract OCR text, entities, relations, givens, target, ambiguities, and confidence.\n"
-                "Do not solve unless needed for normalization."
+                "Normalize labels and spatial relations. Do not solve unless needed for normalization.\n"
+                "%s" % JSON_SCHEMA_NOTE
             )
         else:
             text_prompt = (
                 "Parse this geometry or stereometry problem text into strict JSON.\n"
                 "Extract givens, target, inferred entities, relations, ambiguities, and confidence.\n"
-                "Do not optimize for solving."
+                "Do not optimize for solving.\n"
+                "%s" % JSON_SCHEMA_NOTE
             )
         if user_text:
             text_prompt += "\nUser hint:\n%s" % user_text
 
         content = [{"type": "text", "text": text_prompt}]
-        if has_image:
-            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
-        if variants.get("text_crop"):
-            content.append({"type": "text", "text": "Top crop likely contains problem text."})
-            content.append({"type": "image_url", "image_url": {"url": variants["text_crop"]}})
-        if variants.get("diagram_crop"):
-            content.append({"type": "text", "text": "Bottom crop likely contains the diagram."})
-            content.append({"type": "image_url", "image_url": {"url": variants["diagram_crop"]}})
+        content.extend(self._build_image_blocks(variants))
         return content
 
     def _build_kimi_content(
@@ -234,12 +216,16 @@ class GeometryPhotoSolver:
                 "Solve the geometry problem from the image and return strict JSON.\n"
                 "Use the Qwen visual parse as a helper, but correct it if the image clearly disagrees.\n"
                 "Prioritize correct diagram interpretation over aggressive solving.\n"
+                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
+                "%s\n" % JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
                 "Solve the geometry or stereometry problem from text and return strict JSON.\n"
                 "Use the Qwen parse as a helper, but reason independently.\n"
                 "Prioritize faithful interpretation of givens and target.\n"
+                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
+                "%s\n" % JSON_SCHEMA_NOTE
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
@@ -248,8 +234,7 @@ class GeometryPhotoSolver:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
         content = [{"type": "text", "text": prompt}]
-        if has_image:
-            content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
+        content.extend(self._build_image_blocks(variants))
         return content
 
     def _build_llama_content(
@@ -266,12 +251,16 @@ class GeometryPhotoSolver:
                 "Verify the geometry problem from the image and return strict JSON.\n"
                 "Check the diagram interpretation, givens, target, and final answer.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
+                "%s\n" % JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
                 "Verify the geometry or stereometry problem from text and return strict JSON.\n"
                 "Check givens, target, reasoning, and final answer.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
+                "%s\n" % JSON_SCHEMA_NOTE
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
@@ -281,8 +270,19 @@ class GeometryPhotoSolver:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
         content = [{"type": "text", "text": prompt}]
-        if has_image:
+        content.extend(self._build_image_blocks(variants))
+        return content
+
+    def _build_image_blocks(self, variants: Dict[str, Optional[str]]) -> List[Dict]:
+        content = []
+        if variants.get("full_image"):
             content.append({"type": "image_url", "image_url": {"url": variants["full_image"]}})
+        if variants.get("text_crop"):
+            content.append({"type": "text", "text": "Auxiliary crop: likely problem text region."})
+            content.append({"type": "image_url", "image_url": {"url": variants["text_crop"]}})
+        if variants.get("diagram_crop"):
+            content.append({"type": "text", "text": "Auxiliary crop: likely diagram region."})
+            content.append({"type": "image_url", "image_url": {"url": variants["diagram_crop"]}})
         return content
 
     def _request_json(self, model: str, system_prompt: str, user_content: List[Dict]) -> Dict:
@@ -294,6 +294,8 @@ class GeometryPhotoSolver:
             ],
             "stream": False,
             "max_tokens": JSON_MAX_TOKENS,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
             "provider": {"allow_fallbacks": True},
         }
         _log.info("Requesting geometry JSON: model=%s blocks=%d", model, len(user_content))
@@ -330,9 +332,50 @@ class GeometryPhotoSolver:
         raw_text = message.get("content")
         if raw_text is None:
             raw_text = message.get("reasoning") or ""
-        parsed = self._extract_json_object(raw_text)
+        try:
+            parsed = self._extract_json_object(raw_text)
+        except ValueError as exc:
+            _log.warning("Primary JSON parse failed for model=%s: %s", model, exc)
+            repaired_text = self._repair_non_json_response(model, raw_text)
+            parsed = self._extract_json_object(repaired_text)
         _log.info("Geometry JSON parsed: model=%s chars=%d", model, len(raw_text))
         return parsed
+
+    def _repair_non_json_response(self, model: str, raw_text: str) -> str:
+        repair_prompt = (
+            "Convert the following model output into one strict JSON object without losing meaning.\n"
+            "%s\n"
+            "Original output:\n%s" % (JSON_SCHEMA_NOTE, raw_text)
+        )
+        _log.info("Requesting JSON repair pass: model=%s", model)
+        response = requests.post(
+            ENDPOINT,
+            headers={
+                "Authorization": "Bearer %s" % self.api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You repair malformed outputs into strict JSON only."},
+                    {"role": "user", "content": [{"type": "text", "text": repair_prompt}]},
+                ],
+                "stream": False,
+                "max_tokens": 1800,
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+                "provider": {"allow_fallbacks": True},
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        if not response.ok:
+            body = response.text[:300]
+            raise ValueError("JSON repair failed: %s" % body)
+        data = response.json()
+        message = (data.get("choices") or [{}])[0].get("message") or {}
+        repaired_text = message.get("content") or ""
+        _log.info("JSON repair pass succeeded: model=%s chars=%d", model, len(repaired_text))
+        return repaired_text
 
     def _normalize_result(self, raw: Dict) -> Dict:
         result = {
@@ -427,35 +470,6 @@ class GeometryPhotoSolver:
             "reasons": reasons,
         }
 
-    def _build_cheap_consensus(self, qwen: Dict, kimi: Dict) -> Dict:
-        score = (
-            0.55 * qwen["visual_interpretation"]["confidence"] +
-            0.45 * kimi["answer_confidence"]
-        )
-        return {
-            "accepted": True,
-            "score": score,
-            "status": "accepted",
-            "final_answer": kimi["final_answer"].get("value", ""),
-            "diagram_agreement": qwen["visual_interpretation"]["confidence"],
-            "givens_agreement": 1.0,
-            "answer_agreement": 1.0,
-            "reasons": [],
-        }
-
-    def _can_accept_cheap(self, qwen: Dict, kimi: Dict) -> bool:
-        if qwen["visual_interpretation"]["possible_ambiguities"]:
-            return False
-        if qwen["visual_interpretation"]["confidence"] < 0.78:
-            return False
-        if kimi["visual_interpretation"]["confidence"] < 0.80:
-            return False
-        if kimi["answer_confidence"] < 0.82:
-            return False
-        if kimi["needs_clarification"]:
-            return False
-        return True
-
     def _build_mismatch_summary(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Dict) -> str:
         parts = [
             "consensus_score=%.3f" % consensus["score"],
@@ -468,18 +482,10 @@ class GeometryPhotoSolver:
 
     def _format_user_result(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
         final_answer = kimi["final_answer"].get("value", "").strip()
-        if consensus["status"] == "accepted" and final_answer:
+        if final_answer:
             return "1) %s" % final_answer
 
-        ambiguity_parts = list(qwen["visual_interpretation"]["possible_ambiguities"])
-        if llama is not None:
-            ambiguity_parts.extend(llama["visual_interpretation"]["possible_ambiguities"])
-        ambiguity_parts = [part for part in ambiguity_parts if part]
-        ambiguity_text = "; ".join(dict.fromkeys(ambiguity_parts)) if ambiguity_parts else "интерпретация рисунка ненадёжна"
-
-        if final_answer:
-            return "1) Низкая уверенность: %s. Предварительный ответ: %s" % (ambiguity_text, final_answer)
-        return "1) Низкая уверенность: %s" % ambiguity_text
+        return "1) Не удалось определить ответ"
 
     def _extract_json_object(self, raw_text: str) -> Dict:
         text = raw_text.strip()
@@ -567,17 +573,6 @@ class GeometryPhotoSolver:
         if text is None:
             return ""
         return " ".join(str(text).strip().lower().split())
-
-    def _format_text_only_result(self, kimi_result: Dict) -> str:
-        final_answer = kimi_result["final_answer"].get("value", "").strip()
-        if final_answer and not kimi_result.get("needs_clarification"):
-            return "1) %s" % final_answer
-
-        ambiguities = kimi_result["visual_interpretation"].get("possible_ambiguities") or []
-        ambiguity_text = "; ".join(ambiguities) if ambiguities else "условие понято неоднозначно"
-        if final_answer:
-            return "1) Низкая уверенность: %s. Предварительный ответ: %s" % (ambiguity_text, final_answer)
-        return "1) Низкая уверенность: %s" % ambiguity_text
 
     def _data_url_to_bytes(self, data_url: str) -> Optional[bytes]:
         if not data_url.startswith("data:image/"):

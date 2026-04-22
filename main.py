@@ -4,7 +4,6 @@ import threading
 
 from app.logger import logger
 from app.config import Config
-from app.api_client import APIClient
 from app.geometry_solver import GeometryPhotoSolver
 from app.session import Session
 from app.hotkeys import HotkeyManager
@@ -26,7 +25,6 @@ def main():
     config.load()
 
     # ── Core components ─────────────────────────────────────────────────────
-    api_client = APIClient(config.api_key, config.models)
     geometry_solver = GeometryPhotoSolver(
         config.api_key,
         kimi_model=config.photo_solver_kimi_model,
@@ -72,14 +70,7 @@ def main():
 
         chat_window.chat_view.append_user(display_text)
 
-        # Build API message (simplify if single text block)
-        if len(content_blocks) == 1 and content_blocks[0].get("type") == "text":
-            api_content = content_blocks[0]["text"]
-        else:
-            api_content = content_blocks
-
-        session.add_user(api_content)
-        history = session.get_history()
+        session.add_user(content_blocks)
 
         chat_window.chat_view.begin_assistant()
         # Disable input while waiting for response
@@ -175,7 +166,7 @@ def main():
 
     def on_clipboard_hotkey():
         logger.info("Clipboard hotkey triggered")
-        handle_clipboard_hotkey(config, api_client, geometry_solver)
+        handle_clipboard_hotkey(geometry_solver)
 
     def on_screenshot_hotkey():
         logger.info("Screenshot hotkey triggered")
