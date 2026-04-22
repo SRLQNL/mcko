@@ -145,8 +145,7 @@ fi
 for key in PHOTO_SOLVER_KIMI_MODEL PHOTO_SOLVER_QWEN_MODEL PHOTO_SOLVER_LLAMA_MODEL; do
     if ! grep -Eq "^[[:space:]]*$key=[^[:space:]#]+" "$ENV_FILE"; then
         echo "[!] $key is empty in $ENV_FILE"
-        echo "[!] Fill all PHOTO_SOLVER_* models and run bash run.sh again."
-        exit 1
+        echo "[i] The app will use built-in defaults for $key from app/config.py."
     fi
 done
 
