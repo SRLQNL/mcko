@@ -19,6 +19,7 @@ DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
 DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
 DEFAULT_LLAMA_MODEL = "meta-llama/llama-4-maverick"
 DEFAULT_MODE = "cheap"
+RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
 
 _log = logging.getLogger("mcko.geometry_solver")
 
@@ -156,8 +157,12 @@ class GeometryPhotoSolver:
 
     def _call_qwen(self, variants: Dict[str, Optional[str]], user_text: str) -> Dict:
         user_content = self._build_qwen_content(variants, user_text)
-        result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result, role="parser")
+        try:
+            result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
+            return self._normalize_result(result, role="parser")
+        except RuntimeError as exc:
+            _log.warning("Qwen parser unavailable, using degraded parser fallback: %s", exc)
+            return self._fallback_parser_result(user_text, variants)
 
     def _call_kimi(
         self,
@@ -179,8 +184,12 @@ class GeometryPhotoSolver:
         mismatch_summary: Optional[str],
     ) -> Dict:
         user_content = self._build_llama_content(variants, user_text, qwen_result, kimi_result, mismatch_summary)
-        result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content)
-        return self._normalize_result(result, role="verifier")
+        try:
+            result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content)
+            return self._normalize_result(result, role="verifier")
+        except RuntimeError as exc:
+            _log.warning("Llama verifier unavailable, using degraded verifier fallback: %s", exc)
+            return self._fallback_verifier_result(kimi_result)
 
     def _build_qwen_content(self, variants: Dict[str, Optional[str]], user_text: str) -> List[Dict]:
         has_image = bool(variants.get("full_image"))
@@ -301,33 +310,53 @@ class GeometryPhotoSolver:
             "provider": {"allow_fallbacks": True},
         }
         _log.info("Requesting geometry JSON: model=%s blocks=%d", model, len(user_content))
-        started_at = time.monotonic()
-        try:
-            response = requests.post(
-                ENDPOINT,
-                headers={
-                    "Authorization": "Bearer %s" % self.api_key,
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=REQUEST_TIMEOUT,
-            )
-        except requests.Timeout as exc:
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            _log.error("Geometry solver timeout: model=%s elapsed_ms=%d timeout=%s error=%s", model, elapsed_ms, REQUEST_TIMEOUT, exc)
-            raise RuntimeError("[Таймаут OpenRouter: модель %s не ответила вовремя]" % model)
-        except requests.RequestException as exc:
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            _log.error("Geometry solver request failed: model=%s elapsed_ms=%d error=%s", model, elapsed_ms, exc)
-            raise RuntimeError("[Ошибка сети OpenRouter: %s]" % exc)
+        response = None
+        last_error = None
+        for attempt in range(1, 3):
+            started_at = time.monotonic()
+            try:
+                response = requests.post(
+                    ENDPOINT,
+                    headers={
+                        "Authorization": "Bearer %s" % self.api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except requests.Timeout as exc:
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                last_error = RuntimeError("[Таймаут OpenRouter: модель %s не ответила вовремя]" % model)
+                _log.error("Geometry solver timeout: model=%s attempt=%d elapsed_ms=%d timeout=%s error=%s", model, attempt, elapsed_ms, REQUEST_TIMEOUT, exc)
+                if attempt < 2:
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise last_error
+            except requests.RequestException as exc:
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                last_error = RuntimeError("[Ошибка сети OpenRouter: %s]" % exc)
+                _log.error("Geometry solver request failed: model=%s attempt=%d elapsed_ms=%d error=%s", model, attempt, elapsed_ms, exc)
+                if attempt < 2:
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise last_error
 
-        elapsed_ms = int((time.monotonic() - started_at) * 1000)
-        _log.info("Geometry solver HTTP response: model=%s status=%d elapsed_ms=%d", model, response.status_code, elapsed_ms)
-        if not response.ok:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            _log.info("Geometry solver HTTP response: model=%s attempt=%d status=%d elapsed_ms=%d", model, attempt, response.status_code, elapsed_ms)
+            if response.ok:
+                break
+
             body = response.text[:500]
             request_id = response.headers.get("x-request-id") or response.headers.get("cf-ray") or "-"
-            _log.error("Geometry solver API error: model=%s status=%d request_id=%s body=%s", model, response.status_code, request_id, body)
-            raise RuntimeError("[Ошибка API %d: %s]" % (response.status_code, body))
+            _log.error("Geometry solver API error: model=%s attempt=%d status=%d request_id=%s body=%s", model, attempt, response.status_code, request_id, body)
+            last_error = RuntimeError("[Ошибка API %d: %s]" % (response.status_code, body))
+            if self._is_retryable_status(response.status_code) and attempt < 2:
+                self._sleep_before_retry(attempt)
+                continue
+            raise last_error
+
+        if response is None:
+            raise last_error or RuntimeError("[Ошибка API: пустой ответ]")
 
         data = response.json()
         message = (data.get("choices") or [{}])[0].get("message") or {}
@@ -343,6 +372,13 @@ class GeometryPhotoSolver:
             _log.info("JSON repair pass validated successfully: model=%s chars=%d", model, len(repaired_text))
         _log.info("Geometry JSON parsed: model=%s chars=%d", model, len(raw_text))
         return parsed
+
+    def _is_retryable_status(self, status_code: int) -> bool:
+        return status_code in RETRYABLE_STATUSES
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = 1.0 if attempt <= 1 else 2.0
+        time.sleep(delay)
 
     def _repair_non_json_response(self, model: str, raw_text: str) -> str:
         repair_prompt = (
@@ -426,6 +462,57 @@ class GeometryPhotoSolver:
             result["solution_steps"] = []
 
         return result
+
+    def _fallback_parser_result(self, user_text: str, variants: Dict[str, Optional[str]]) -> Dict:
+        summary = "Parser fallback used because Qwen was temporarily unavailable."
+        if variants.get("full_image"):
+            summary += " The image should still be checked directly by Kimi and Llama."
+        return {
+            "task_type": "geometry_photo",
+            "ocr_text": user_text or "",
+            "normalized_problem_text": user_text or "",
+            "diagram_entities": [],
+            "diagram_relations": [],
+            "givens": self._normalize_givens([]),
+            "target": {"statement": ""},
+            "visual_interpretation": {
+                "summary": summary,
+                "confidence": 0.0,
+                "possible_ambiguities": ["parser unavailable"],
+            },
+            "reasoning_summary": [],
+            "solution_steps": [],
+            "final_answer": {"value": "", "format": "text"},
+            "answer_confidence": 0.0,
+            "consistency_checks": [],
+            "needs_clarification": True,
+        }
+
+    def _fallback_verifier_result(self, kimi_result: Dict) -> Dict:
+        final_answer = kimi_result.get("final_answer") or {"value": "", "format": "text"}
+        return {
+            "task_type": kimi_result.get("task_type") or "geometry_photo",
+            "ocr_text": kimi_result.get("ocr_text") or "",
+            "normalized_problem_text": kimi_result.get("normalized_problem_text") or "",
+            "diagram_entities": kimi_result.get("diagram_entities") or [],
+            "diagram_relations": kimi_result.get("diagram_relations") or [],
+            "givens": kimi_result.get("givens") or [],
+            "target": kimi_result.get("target") or {"statement": ""},
+            "visual_interpretation": {
+                "summary": "Verifier fallback used because Llama was temporarily unavailable.",
+                "confidence": 0.0,
+                "possible_ambiguities": ["verifier unavailable"],
+            },
+            "reasoning_summary": [],
+            "solution_steps": [],
+            "final_answer": {
+                "value": str(final_answer.get("value") or ""),
+                "format": str(final_answer.get("format") or "text"),
+            },
+            "answer_confidence": 0.0,
+            "consistency_checks": [],
+            "needs_clarification": True,
+        }
 
     def _normalize_entities(self, value) -> List[Dict]:
         if isinstance(value, dict):
