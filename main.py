@@ -5,6 +5,7 @@ import threading
 from app.logger import logger
 from app.config import Config
 from app.api_client import APIClient
+from app.geometry_solver import GeometryPhotoSolver
 from app.session import Session
 from app.hotkeys import HotkeyManager
 from app.scenario2 import handle_clipboard_hotkey
@@ -26,6 +27,13 @@ def main():
 
     # ── Core components ─────────────────────────────────────────────────────
     api_client = APIClient(config.api_key, config.models)
+    geometry_solver = GeometryPhotoSolver(
+        config.api_key,
+        kimi_model=config.photo_solver_kimi_model,
+        qwen_model=config.photo_solver_qwen_model,
+        llama_model=config.photo_solver_llama_model,
+        mode=config.photo_solver_mode,
+    )
     session = Session()
     logger.info("Core components initialized")
 
@@ -50,6 +58,10 @@ def main():
     def on_send(content_blocks: list) -> None:
         """Called when user submits a message from the chat window."""
         logger.info("User submitted message: %d blocks", len(content_blocks))
+        has_images = any(
+            isinstance(block, dict) and block.get("type") == "image_url"
+            for block in content_blocks
+        )
 
         # Determine display text for chat view
         text_parts = [
@@ -74,18 +86,24 @@ def main():
         chat_window._input_field.configure(state="disabled")
 
         def _stream_in_thread():
-            logger.info("Starting streaming response")
+            logger.info("Starting response worker: has_images=%s", has_images)
             full_text = ""
             had_stream_error = False
-            result = api_client.send(
-                system_prompt=config.system_prompt_1,
-                messages=history,
-                stream=True,
-            )
+            if has_images:
+                result = geometry_solver.solve_content_blocks(content_blocks)
+            else:
+                result = api_client.send(
+                    system_prompt=config.system_prompt_1,
+                    messages=history,
+                    stream=True,
+                )
             if isinstance(result, str):
                 # Error string
                 root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
-                had_stream_error = True
+                if result.startswith("[Ошибка ") or result.startswith("\n[Ошибка "):
+                    had_stream_error = True
+                else:
+                    full_text = result
             else:
                 for chunk in result:
                     if _is_api_error_text(chunk):
@@ -160,7 +178,7 @@ def main():
 
     def on_clipboard_hotkey():
         logger.info("Clipboard hotkey triggered")
-        handle_clipboard_hotkey(config, api_client)
+        handle_clipboard_hotkey(config, api_client, geometry_solver)
 
     def on_screenshot_hotkey():
         logger.info("Screenshot hotkey triggered")

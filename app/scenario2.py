@@ -3,11 +3,12 @@ import logging
 from app import clipboard as cb
 from app.api_client import APIClient
 from app.config import Config
+from app.geometry_solver import GeometryPhotoSolver
 
 _log = logging.getLogger("mcko.scenario2")
 
 
-def handle_clipboard_hotkey(config: Config, api_client: APIClient) -> None:
+def handle_clipboard_hotkey(config: Config, api_client: APIClient, geometry_solver: GeometryPhotoSolver) -> None:
     """Read clipboard, send to AI, write response back to clipboard.
 
     This function is meant to be called in a background thread.
@@ -35,15 +36,15 @@ def handle_clipboard_hotkey(config: Config, api_client: APIClient) -> None:
             _log.warning("read_image returned None, aborting")
             return
         data_url = cb.image_to_base64(image_bytes)
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                    {"type": "text", "text": "Что изображено на картинке?"},
-                ],
-            }
+        content_blocks = [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": "Реши задачу по изображению."},
         ]
+        _log.info("Sending clipboard image to geometry solver")
+        result = geometry_solver.solve_content_blocks(content_blocks)
+        cb.write_text(result)
+        _log.info("Geometry solver response written to clipboard")
+        return
 
     _log.info("Sending clipboard content to API (stream=False)")
     result = api_client.send(
