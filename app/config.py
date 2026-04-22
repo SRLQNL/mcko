@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+from typing import List
 from app.logger import logger
 
 try:
@@ -26,6 +27,7 @@ class Config:
     def __init__(self):
         self.api_key: str = ""
         self.model: str = ""
+        self.models: List[str] = []
         self.system_prompt_1: str = ""
         self.system_prompt_2: str = ""
         self.hotkey_window: str = ""
@@ -61,6 +63,7 @@ class Config:
             len(self.api_key),
         )
         self.model = self._env_or_default("OPENROUTER_MODEL")
+        self.models = self._load_models()
         self.system_prompt_1 = self._env_or_default("SYSTEM_PROMPT_1")
         self.system_prompt_2 = self._env_or_default("SYSTEM_PROMPT_2")
         self.hotkey_window = self._env_or_default("HOTKEY_WINDOW")
@@ -69,8 +72,9 @@ class Config:
         self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
 
         logger.info(
-            "Config loaded: model=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s",
+            "Config loaded: model=%s, models=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s",
             self.model,
+            ",".join(self.models),
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
@@ -96,6 +100,32 @@ class Config:
     def _env_or_default(self, key: str) -> str:
         value = os.environ.get(key, "").strip()
         return value or DEFAULTS[key]
+
+    def _load_models(self) -> List[str]:
+        raw_models = os.environ.get("OPENROUTER_MODELS", "").strip()
+        if raw_models:
+            models = self._parse_model_list(raw_models)
+            if models:
+                self.model = models[0]
+                logger.info("Loaded model pool from OPENROUTER_MODELS: %s", ",".join(models))
+                return models
+            logger.warning("OPENROUTER_MODELS is set but no valid model slugs were parsed")
+
+        if self.model:
+            logger.info("Using single model from OPENROUTER_MODEL: %s", self.model)
+            return [self.model]
+
+        logger.warning("No model configured, falling back to default model: %s", DEFAULTS["OPENROUTER_MODEL"])
+        self.model = DEFAULTS["OPENROUTER_MODEL"]
+        return [self.model]
+
+    def _parse_model_list(self, raw_value: str) -> List[str]:
+        models = []
+        for chunk in raw_value.split(","):
+            model = chunk.strip()
+            if model and model not in models:
+                models.append(model)
+        return models
 
     def _load_env_fallback(self, env_path: str) -> None:
         """Minimal .env loader used when python-dotenv is unavailable."""
