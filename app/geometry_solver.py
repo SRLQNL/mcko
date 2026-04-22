@@ -338,6 +338,7 @@ class GeometryPhotoSolver:
             _log.warning("Primary JSON parse failed for model=%s: %s", model, exc)
             repaired_text = self._repair_non_json_response(model, raw_text)
             parsed = self._extract_json_object(repaired_text)
+            _log.info("JSON repair pass validated successfully: model=%s chars=%d", model, len(repaired_text))
         _log.info("Geometry JSON parsed: model=%s chars=%d", model, len(raw_text))
         return parsed
 
@@ -374,7 +375,6 @@ class GeometryPhotoSolver:
         data = response.json()
         message = (data.get("choices") or [{}])[0].get("message") or {}
         repaired_text = message.get("content") or ""
-        _log.info("JSON repair pass succeeded: model=%s chars=%d", model, len(repaired_text))
         return repaired_text
 
     def _normalize_result(self, raw: Dict) -> Dict:
@@ -488,7 +488,7 @@ class GeometryPhotoSolver:
         return "1) Не удалось определить ответ"
 
     def _extract_json_object(self, raw_text: str) -> Dict:
-        text = raw_text.strip()
+        text = self._strip_json_wrappers(raw_text)
         if not text:
             raise ValueError("Empty JSON response")
 
@@ -497,15 +497,81 @@ class GeometryPhotoSolver:
         except ValueError:
             pass
 
+        candidates = self._candidate_json_objects(text)
+        last_error = None
+        for candidate in candidates:
+            try:
+                return json.loads(candidate)
+            except ValueError as exc:
+                last_error = exc
+                repaired = self._repair_json(candidate)
+                try:
+                    return json.loads(repaired)
+                except ValueError as repaired_exc:
+                    last_error = repaired_exc
+                    continue
+
+        if candidates:
+            raise ValueError("%s: %s" % (last_error.__class__.__name__ if last_error else "Invalid JSON", str(last_error or "unknown parse failure")))
+        raise ValueError("No JSON object found in response: %s" % text[:200])
+
+    def _candidate_json_objects(self, text: str) -> List[str]:
+        candidates = []
+
+        balanced = self._extract_balanced_object(text)
+        if balanced:
+            candidates.append(balanced)
+
         match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise ValueError("No JSON object found in response: %s" % text[:200])
-        candidate = match.group(0)
-        try:
-            return json.loads(candidate)
-        except ValueError:
-            repaired = self._repair_json(candidate)
-            return json.loads(repaired)
+        if match:
+            greedy = match.group(0).strip()
+            if greedy and greedy not in candidates:
+                candidates.append(greedy)
+
+        first_brace = text.find("{")
+        if first_brace != -1:
+            suffix = text[first_brace:].strip()
+            if suffix and suffix not in candidates:
+                candidates.append(suffix)
+
+        return candidates
+
+    def _extract_balanced_object(self, text: str) -> Optional[str]:
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:index + 1].strip()
+
+        return text[start:].strip()
+
+    def _strip_json_wrappers(self, raw_text: str) -> str:
+        text = (raw_text or "").strip()
+        if not text:
+            return ""
+        text = text.replace("```json", "").replace("```", "").strip()
+        return text
 
     def _repair_json(self, text: str) -> str:
         repaired = text
@@ -520,9 +586,9 @@ class GeometryPhotoSolver:
         close_brackets = repaired.count("]")
         if close_brackets < open_brackets:
             repaired += "]" * (open_brackets - close_brackets)
-        # Remove markdown fences if the model wrapped JSON in them.
-        repaired = repaired.replace("```json", "").replace("```", "").strip()
-        _log.warning("Applied JSON repair before parsing model output")
+        repaired = self._strip_json_wrappers(repaired)
+        if repaired != text:
+            _log.warning("Applied local JSON repair before parsing model output")
         return repaired
 
     def _coerce_confidence(self, value) -> float:
