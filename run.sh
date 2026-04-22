@@ -142,6 +142,21 @@ if ! grep -Eq '^[[:space:]]*OPENROUTER_API_KEY=[^[:space:]#]+' "$ENV_FILE"; then
     exit 1
 fi
 
+HAS_SINGLE_MODEL=0
+HAS_MODEL_POOL=0
+if grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE"; then
+    HAS_SINGLE_MODEL=1
+fi
+if grep -Eq '^[[:space:]]*OPENROUTER_MODELS=[^[:space:]#]+' "$ENV_FILE"; then
+    HAS_MODEL_POOL=1
+fi
+
+if [ "$HAS_SINGLE_MODEL" -eq 0 ] && [ "$HAS_MODEL_POOL" -eq 0 ]; then
+    echo "[!] No OPENROUTER_MODEL/OPENROUTER_MODELS configured in $ENV_FILE"
+    echo "[!] Image solver will still use PHOTO_SOLVER_* models."
+    echo "[!] Text-only chat requests will return a configuration error until a model is set."
+fi
+
 # ── Launch via watchdog ───────────────────────────────────────────────────────
 echo ""
 chmod +x "$SCRIPT_DIR/watchdog.sh"

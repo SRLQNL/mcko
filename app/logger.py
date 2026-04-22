@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcko.log")
@@ -25,12 +26,13 @@ def _setup_logger() -> logging.Logger:
     file_handler.setFormatter(formatter)
     file_handler.setLevel(LOG_LEVEL)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(LOG_LEVEL)
-
     root_logger.addHandler(file_handler)
-    root_logger.addHandler(stream_handler)
+    # Avoid duplicate lines when watchdog redirects stdout/stderr to the same log file.
+    if not os.environ.get("MCKO_DISABLE_STDERR_LOGGING") and sys.stderr.isatty():
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        stream_handler.setLevel(LOG_LEVEL)
+        root_logger.addHandler(stream_handler)
 
     root_logger.info("Logger initialized, log file: %s", LOG_FILE)
     return root_logger

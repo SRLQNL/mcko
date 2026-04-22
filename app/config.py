@@ -13,7 +13,6 @@ except ModuleNotFoundError:
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
 DEFAULTS = {
-    "OPENROUTER_MODEL": "openai/gpt-4o",
     "SYSTEM_PROMPT_1": "Ты полезный AI-ассистент. Отвечай кратко и по делу.",
     "SYSTEM_PROMPT_2": "Обработай содержимое буфера обмена и дай краткий полезный ответ.",
     "HOTKEY_WINDOW": "<ctrl>+<space>",
@@ -70,7 +69,7 @@ class Config:
             self.api_key[-4:],
             len(self.api_key),
         )
-        self.model = self._env_or_default("OPENROUTER_MODEL")
+        self.model = os.environ.get("OPENROUTER_MODEL", "").strip()
         self.models = self._load_models()
         self.system_prompt_1 = self._env_or_default("SYSTEM_PROMPT_1")
         self.system_prompt_2 = self._env_or_default("SYSTEM_PROMPT_2")
@@ -85,8 +84,8 @@ class Config:
 
         logger.info(
             "Config loaded: model=%s, models=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, photo_solver_mode=%s",
-            self.model,
-            ",".join(self.models),
+            self.model or "-",
+            ",".join(self.models) if self.models else "-",
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
@@ -128,9 +127,9 @@ class Config:
             logger.info("Using single model from OPENROUTER_MODEL: %s", self.model)
             return [self.model]
 
-        logger.warning("No model configured, falling back to default model: %s", DEFAULTS["OPENROUTER_MODEL"])
-        self.model = DEFAULTS["OPENROUTER_MODEL"]
-        return [self.model]
+        logger.warning("No OPENROUTER_MODEL/OPENROUTER_MODELS configured; text-only chat model is disabled")
+        self.model = ""
+        return []
 
     def _parse_model_list(self, raw_value: str) -> List[str]:
         models = []
