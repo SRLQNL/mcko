@@ -114,9 +114,9 @@
 -------------------
 
   OPENROUTER_API_KEY    API-ключ (получить на https://openrouter.ai/keys)
-  PHOTO_SOLVER_KIMI_MODEL   primary solver (по умолчанию: moonshotai/kimi-k2.6)
-  PHOTO_SOLVER_QWEN_MODEL   parser / OCR / visual extraction
-  PHOTO_SOLVER_LLAMA_MODEL  verifier
+  OPENROUTER_MODEL      Единственная модель runtime (по умолчанию: moonshotai/kimi-k2.6)
+  SYSTEM_PROMPT_1       Системный промпт для окна чата
+  SYSTEM_PROMPT_2       Системный промпт для фонового запроса
   HOTKEY_WINDOW         Переключить окно (по умолчанию: <ctrl>+<space>)
   HOTKEY_SHOW           Только показать окно (по умолчанию: <ctrl>+<shift>+<space>)
   HOTKEY_CLIPBOARD      Хоткей буфера (по умолчанию: <ctrl>+<alt>+<space>)
@@ -124,11 +124,9 @@
 
   Формат хоткеев (pynput): <ctrl>, <alt>, <shift>, <space>, <f1>...<f12>, a...z
 
-Runtime использует два маршрута:
-- text-only → быстрый путь через Kimi 2.6
-- image / image+text → трёхмодельный GeometryPhotoSolver (Qwen → Kimi → Llama)
-
-Legacy-переменные OPENROUTER_MODEL / OPENROUTER_MODELS / SYSTEM_PROMPT_1 / SYSTEM_PROMPT_2 больше не используются.
+Runtime использует одну модель для всех запросов:
+- text-only → OpenRouter chat completion через Kimi 2.6
+- image / image+text → тот же OpenRouter chat completion через Kimi 2.6
 
 После изменения .env перезапустите приложение (kill + bash run.sh).
 
@@ -160,7 +158,7 @@ watchdog автоматически перезапустит его через 3
   .env            — конфигурация (заполняется вручную)
   .env.example    — шаблон конфигурации
   mcko.log        — журнал событий (создаётся автоматически)
-  app/            — логика: geometry solver, хоткеи, буфер обмена, история
+  app/            — логика: API-клиент, хоткеи, буфер обмена, история
   ui/             — интерфейс: окно, область чата, поле ввода
 
 ================================================================================

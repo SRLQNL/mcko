@@ -67,11 +67,9 @@ mcko/
 │  InputField ──(Enter)──► Session.add_user()                         │
 │      │                        │                                      │
 │      │                        ▼                                      │
-│      │               solve_content_blocks()                          │
-│      │                        │                                      │
-│      │                        ├─► text-only: Kimi                   │
-│      │                        └─► image/image+text:                 │
-│      │                             Qwen → Kimi → Llama              │
+│      │                   APIClient.send(                             │
+│      │                     model, messages, images                   │
+│      │                   ) ──► OpenRouter API                        │
 │      │                                                               │
 │      ▼                                                               │
 │  ChatView.append_assistant_chunk()                                   │
@@ -86,14 +84,15 @@ mcko/
 │  Clipboard.read() ──► текст или изображение (PIL → base64)           │
 │      │                                                               │
 │      ▼                                                               │
-│  GeometryPhotoSolver.solve_content_blocks()                          │
-│      │                                                               │
-│      ├─► Qwen  (parser / OCR)                                        │
-│      ├─► Kimi  (primary solver)                                      │
-│      └─► Llama (verifier)                                            │
+│  APIClient.send(                                                     │
+│    model,                                                            │
+│    [{"role":"system", content: SYSTEM_PROMPT_2},                     │
+│     {"role":"user",   content: <clipboard_content>}],               │
+│    stream=False                                                      │
+│  ) ──► OpenRouter API                                                │
 │      │                                                               │
 │      ▼                                                               │
-│  Clipboard.write(answer_only_text)                                   │
+│  Clipboard.write(response_text)                                      │
 │  (окно не открывается, уведомление опционально)                     │
 └──────────────────────────────────────────────────────────────────────┘
 
@@ -119,21 +118,19 @@ mcko/
   4. Возвращаем список content-блоков для OpenRouter API
 
 
-МОДУЛЬ: GeometryPhotoSolver (app/geometry_solver.py)
-----------------------------------------------------
+МОДУЛЬ: APIClient (app/api_client.py)
+--------------------------------------
   endpoint: https://openrouter.ai/api/v1/chat/completions
   auth:     Bearer OPENROUTER_API_KEY
   format:   OpenAI-compatible JSON
 
-  Конвейер solve_content_blocks():
-    - извлекает text/image content blocks
-    - если вход text-only: решает через быстрый путь Kimi
-    - если есть изображение: строит full/text_crop/diagram_crop варианты
-    - для image/image+text отправляет задачу в Qwen → Kimi → Llama
-    - при недоступности parser/verifier уходит в degraded fallback
-    - сериализует solve-пайплайн для большей стабильности
-    - при необходимости делает self-check round
-    - наружу возвращает только answer-only строку вида "1) 69"
+  Метод send(system_prompt, messages, stream=True):
+    - собирает тело запроса
+    - отправляет все запросы через одну модель OpenRouter
+    - при stream=True читает SSE-поток и возвращает генератор строк
+    - при stream=False возвращает полный текст ответа
+    - ретраит 408/429/5xx и сетевые ошибки
+    - при ошибке возвращает строку с описанием ошибки (не бросает исключение)
 
 
 МОДУЛЬ: Session (app/session.py)
@@ -214,7 +211,7 @@ run.sh выполняет:
   Clipboard → PIL.Image → BytesIO → base64 encode
   → сохранить в InputField._images["picN"]
   → при отправке: собрать content-блок {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
-  → передать в GeometryPhotoSolver.solve_content_blocks() вместе с текстом
+  → передать в APIClient.send() вместе с текстом
 
 Сценарий 2:
   Clipboard → PIL.ImageGrab.grabclipboard()

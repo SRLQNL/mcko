@@ -142,15 +142,9 @@ if ! grep -Eq '^[[:space:]]*OPENROUTER_API_KEY=[^[:space:]#]+' "$ENV_FILE"; then
     exit 1
 fi
 
-for key in PHOTO_SOLVER_KIMI_MODEL PHOTO_SOLVER_QWEN_MODEL PHOTO_SOLVER_LLAMA_MODEL; do
-    if ! grep -Eq "^[[:space:]]*$key=[^[:space:]#]+" "$ENV_FILE"; then
-        echo "[!] $key is empty in $ENV_FILE"
-        echo "[i] The app will use built-in defaults for $key from app/config.py."
-    fi
-done
-
-if grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE" || grep -Eq '^[[:space:]]*OPENROUTER_MODELS=[^[:space:]#]+' "$ENV_FILE"; then
-    echo "[i] OPENROUTER_MODEL / OPENROUTER_MODELS are legacy settings and are ignored by the current multi-model solver."
+if ! grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE"; then
+    echo "[!] OPENROUTER_MODEL is empty in $ENV_FILE"
+    echo "[i] The app will use the built-in default model from app/config.py."
 fi
 
 # ── Launch via watchdog ───────────────────────────────────────────────────────

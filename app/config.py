@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+
 from app.logger import logger
 
 try:
@@ -12,26 +13,44 @@ except ModuleNotFoundError:
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
 DEFAULTS = {
+    "OPENROUTER_MODEL": "moonshotai/kimi-k2.6",
+    "SYSTEM_PROMPT_1": (
+        "Решай задачу максимально тщательно и приходи к правильному ответу. "
+        "Внутренние рассуждения наружу не выводи. В ответе не пиши объяснения, "
+        "рассуждения, вступления, комментарии, markdown, заголовки, метки вроде "
+        "'Ответ:' и любой лишний текст. Выводи только итоговые ответы в формате "
+        "нумерованного списка. Каждый пункт должен быть строго в виде: 1) Ответ. "
+        "Если ответ один, выведи только одну строку: 1) Ответ. Если ответов несколько, "
+        "выведи каждый ответ с новой строки в таком же формате. Ничего не добавляй "
+        "до или после списка."
+    ),
+    "SYSTEM_PROMPT_2": (
+        "Решай задачу максимально тщательно и приходи к правильному ответу. "
+        "Внутренние рассуждения наружу не выводи. В ответе не пиши объяснения, "
+        "рассуждения, вступления, комментарии, markdown, заголовки, метки вроде "
+        "'Ответ:' и любой лишний текст. Выводи только итоговые ответы в формате "
+        "нумерованного списка. Каждый пункт должен быть строго в виде: 1) Ответ. "
+        "Если ответ один, выведи только одну строку: 1) Ответ. Если ответов несколько, "
+        "выведи каждый ответ с новой строки в таком же формате. Ничего не добавляй "
+        "до или после списка."
+    ),
     "HOTKEY_WINDOW": "<ctrl>+<space>",
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
     "HOTKEY_SCREENSHOT": "<ctrl>+<shift>+s",
-    "PHOTO_SOLVER_KIMI_MODEL": "moonshotai/kimi-k2.6",
-    "PHOTO_SOLVER_QWEN_MODEL": "qwen/qwen2.5-vl-72b-instruct",
-    "PHOTO_SOLVER_LLAMA_MODEL": "meta-llama/llama-4-maverick",
 }
 
 
 class Config:
     def __init__(self):
-        self.api_key: str = ""
-        self.hotkey_window: str = ""
-        self.hotkey_show: str = ""
-        self.hotkey_clipboard: str = ""
-        self.hotkey_screenshot: str = ""
-        self.photo_solver_kimi_model: str = ""
-        self.photo_solver_qwen_model: str = ""
-        self.photo_solver_llama_model: str = ""
+        self.api_key = ""
+        self.model = ""
+        self.system_prompt_1 = ""
+        self.system_prompt_2 = ""
+        self.hotkey_window = ""
+        self.hotkey_show = ""
+        self.hotkey_clipboard = ""
+        self.hotkey_screenshot = ""
 
     def load(self) -> None:
         logger.info("Loading configuration from .env")
@@ -49,44 +68,42 @@ class Config:
 
         if not os.environ.get("OPENROUTER_API_KEY"):
             logger.error("Missing required config fields: %s", REQUIRED_FIELDS)
-            raise ValueError(f"Missing required environment variables: {REQUIRED_FIELDS}")
+            raise ValueError("Missing required environment variables: %s" % REQUIRED_FIELDS)
 
         self.api_key = self._normalize_secret(os.environ["OPENROUTER_API_KEY"])
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is empty after stripping whitespace")
+
         logger.info(
             "Primary API key loaded: starts_with=%s, ends_with=%s, length=%d",
             self.api_key[:8],
             self.api_key[-4:],
             len(self.api_key),
         )
+
+        self.model = self._env_or_default("OPENROUTER_MODEL")
+        self.system_prompt_1 = self._env_or_default("SYSTEM_PROMPT_1")
+        self.system_prompt_2 = self._env_or_default("SYSTEM_PROMPT_2")
         self.hotkey_window = self._env_or_default("HOTKEY_WINDOW")
         self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
         self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
         self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
-        self.photo_solver_kimi_model = self._env_or_default("PHOTO_SOLVER_KIMI_MODEL")
-        self.photo_solver_qwen_model = self._env_or_default("PHOTO_SOLVER_QWEN_MODEL")
-        self.photo_solver_llama_model = self._env_or_default("PHOTO_SOLVER_LLAMA_MODEL")
 
         logger.info(
-            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, kimi=%s, qwen=%s, llama=%s",
+            "Config loaded: model=%s, hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s",
+            self.model,
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
             self.hotkey_screenshot,
-            self.photo_solver_kimi_model,
-            self.photo_solver_qwen_model,
-            self.photo_solver_llama_model,
         )
 
     def _normalize_secret(self, value: str) -> str:
-        """Trim whitespace/BOM, unwrap quotes, and base64-decode if needed."""
         logger.info("Normalizing OPENROUTER_API_KEY from environment")
         normalized = value.strip().lstrip("\ufeff").strip()
         if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in ("'", '"'):
             logger.info("OPENROUTER_API_KEY had surrounding quotes, removing them")
             normalized = normalized[1:-1].strip()
-        # Если ключ не начинается с sk- — считаем что он в base64
         if not normalized.startswith("sk-"):
             try:
                 normalized = base64.b64decode(normalized).decode("utf-8").strip()
@@ -100,7 +117,6 @@ class Config:
         return value or DEFAULTS[key]
 
     def _load_env_fallback(self, env_path: str) -> None:
-        """Minimal .env loader used when python-dotenv is unavailable."""
         with open(env_path, "r", encoding="utf-8") as fh:
             for raw_line in fh:
                 line = raw_line.strip()
