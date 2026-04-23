@@ -108,6 +108,24 @@ def main():
                             continue
                         full_text += chunk
                         root.after(0, lambda t=chunk: chat_window.chat_view.append_assistant_chunk(t))
+
+                if not full_text:
+                    logger.warning(
+                        "Stream returned no assistant content, retrying non-stream request: has_images=%s stream_error=%s",
+                        has_images,
+                        had_stream_error,
+                    )
+                    fallback_text = api_client.send(
+                        system_prompt=config.system_prompt_1,
+                        messages=history,
+                        stream=False,
+                    )
+                    if isinstance(fallback_text, str) and fallback_text:
+                        if _is_api_error_text(fallback_text):
+                            had_stream_error = True
+                        else:
+                            full_text = fallback_text
+                        root.after(0, lambda t=fallback_text: chat_window.chat_view.append_assistant_chunk(t))
             except Exception as exc:
                 had_stream_error = True
                 logger.error("Response worker failed: %s", exc, exc_info=True)

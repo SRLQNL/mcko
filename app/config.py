@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
 DEFAULTS = {
-    "OPENROUTER_MODEL": "moonshotai/kimi-k2.6",
+    "OPENROUTER_MODEL": "qwen/qwen2.5-vl-72b-instruct",
     "SYSTEM_PROMPT_1": (
         "Решай задачу максимально тщательно и приходи к правильному ответу. "
         "Внутренние рассуждения наружу не выводи. В ответе не пиши объяснения, "
