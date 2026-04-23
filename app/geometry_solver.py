@@ -1203,10 +1203,9 @@ class GeometryPhotoSolver:
             return kimi_answer or llama_answer
 
         answers_match = self._answers_effectively_match(kimi, llama)
-        parser_clear = not qwen.get("needs_clarification") and not (
-            (qwen.get("visual_interpretation") or {}).get("possible_ambiguities") or []
-        )
         parser_unavailable = "parser unavailable" in (qwen.get("visual_interpretation") or {}).get("possible_ambiguities", [])
+        parser_explicit_ambiguity = self._parser_has_explicit_ambiguity(qwen)
+        parser_clear = not parser_explicit_ambiguity
         verifier_independent = self._has_independent_verifier(llama)
         solver_degraded = self._solver_is_degraded(kimi)
         solver_repaired = self._used_repair(kimi)
@@ -1239,7 +1238,10 @@ class GeometryPhotoSolver:
             return ""
 
         if llama_answer and not kimi_answer:
-            if parser_clear and consensus["score"] >= ACCEPT_SCORE_THRESHOLD:
+            if parser_clear and (
+                consensus["score"] >= ACCEPT_SCORE_THRESHOLD or
+                self._coerce_confidence((llama or {}).get("answer_confidence")) >= 0.75
+            ):
                 _log.info("Accepting verifier answer because primary solver did not provide an answer")
                 return llama_answer
             return ""
@@ -1328,6 +1330,12 @@ class GeometryPhotoSolver:
         if self._coerce_confidence((llama or {}).get("answer_confidence")) < 0.75:
             return False
         return True
+
+    def _parser_has_explicit_ambiguity(self, qwen: Dict) -> bool:
+        ambiguities = ((qwen.get("visual_interpretation") or {}).get("possible_ambiguities") or [])
+        if ambiguities:
+            return True
+        return False
 
     def _render_answer_only(self, final_answer: str) -> str:
         answer = (final_answer or "").strip()
