@@ -4,7 +4,6 @@ import base64
 import io
 import json
 import logging
-import math
 import re
 import threading
 import time
@@ -142,10 +141,10 @@ class GeometryPhotoSolver:
                 )
 
                 qwen_result = self._call_qwen(preprocessed, user_text)
-                exact_answer = self._try_exact_answer_from_parser(qwen_result, user_text)
-                if exact_answer:
-                    _log.info("Returning exact-engine image answer after parser extraction: %s", exact_answer)
-                    return self._render_answer_only(exact_answer)
+                structured_answer = self._try_structured_answer_from_parser(qwen_result, user_text)
+                if structured_answer:
+                    _log.info("Returning structured answer after parser extraction: %s", structured_answer)
+                    return self._render_answer_only(structured_answer)
                 kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
                 llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
                 consensus = self._compare_results(kimi_result, qwen_result, llama_result)
@@ -205,10 +204,6 @@ class GeometryPhotoSolver:
 
     def _solve_text_only(self, user_text: str) -> str:
         _log.info("Using text-only fast path via Kimi")
-        exact_answer = self._try_exact_answer_engine(user_text)
-        if exact_answer:
-            _log.info("Returning exact-engine text-only answer: %s", exact_answer)
-            return self._render_answer_only(exact_answer)
         try:
             kimi_result = self._call_kimi_text_only(user_text)
         except RecoverableProviderError as exc:
@@ -237,80 +232,59 @@ class GeometryPhotoSolver:
                     text_parts.append(text)
         return image_urls, "\n".join(text_parts)
 
-    def _try_exact_answer_from_parser(self, qwen_result: Dict, user_text: str) -> str:
+    def _try_structured_answer_from_parser(self, qwen_result: Dict, user_text: str) -> str:
         for candidate in (
             qwen_result.get("normalized_problem_text") or "",
             qwen_result.get("ocr_text") or "",
             user_text or "",
         ):
-            answer = self._try_exact_answer_engine(candidate)
+            answer = self._try_prism_option_answer(candidate)
             if answer:
                 return answer
         return ""
 
-    def _try_exact_answer_engine(self, text: str) -> str:
-        normalized = self._normalize_exact_text(text)
-        if not normalized:
+    def _try_prism_option_answer(self, text: str) -> str:
+        normalized = self._normalize_structured_text(text)
+        if "призма" not in normalized or "выберите" not in normalized:
             return ""
-        task_chunks = self._split_exact_task_chunks(normalized)
-        split_answers = []
-        for chunk in task_chunks:
-            answer = self._try_exact_answer_single(chunk)
-            if not answer:
-                split_answers = []
-                break
-            split_answers.append(answer)
-        if len(split_answers) >= 2:
-            return "\n".join(
-                ["%d) %s" % (index, answer) for index, answer in enumerate(split_answers, start=1)]
-            )
-        direct_answer = self._try_exact_answer_single(normalized)
-        if direct_answer:
-            return direct_answer
+
+        prism_kind = ""
+        if "треугольная призма" in normalized:
+            prism_kind = "triangular"
+        elif "четырехугольная призма" in normalized or "четырёхугольная призма" in normalized:
+            prism_kind = "quadrilateral"
+        if not prism_kind:
+            return ""
+
+        option_pairs = self._extract_line_pair_options(normalized)
+        option_lines = self._extract_single_line_options(normalized)
+
+        if "перпендикулярные плоскости abc" in normalized and option_lines:
+            coordinates = self._prism_coordinates(prism_kind)
+            selected = []
+            for option, line_name in option_lines:
+                if self._line_perpendicular_to_base_plane(line_name, coordinates):
+                    selected.append(option)
+            return "".join(selected)
+
+        if "скрещивающихся прямых" in normalized and option_pairs:
+            coordinates = self._prism_coordinates(prism_kind)
+            selected = []
+            for option, first_line, second_line in option_pairs:
+                if self._lines_are_skew(first_line, second_line, coordinates):
+                    selected.append(option)
+            return "".join(selected)
+
         return ""
 
-    def _try_exact_answer_single(self, normalized: str) -> str:
-        for solver in (
-            self._exact_right_triangle_median,
-            self._exact_prism_perpendicular_lines,
-            self._exact_isosceles_exterior_angle,
-            self._exact_rhombus_incircle_area,
-            self._exact_regular_pyramid_sine,
-            self._exact_parallelepiped_distance,
-            self._exact_marker_probability,
-            self._exact_two_clubs_overlap,
-            self._exact_interval_probability,
-            self._exact_same_color_probability,
-        ):
-            answer = solver(normalized)
-            if answer:
-                return answer
-        return ""
-
-    def _split_exact_task_chunks(self, normalized: str) -> List[str]:
-        chunks = []
-        boundaries = []
-        for match in re.finditer(r"(?:^|\s)(тип\s+\d+\s*№\s*\d+)", normalized):
-            boundaries.append(match.start(1))
-        if len(boundaries) < 2:
-            return []
-        boundaries.append(len(normalized))
-        for index in range(len(boundaries) - 1):
-            chunk = normalized[boundaries[index]:boundaries[index + 1]].strip(" .\n\t")
-            if chunk:
-                chunks.append(chunk)
-        return chunks
-
-    def _normalize_exact_text(self, text: str) -> str:
-        normalized = (text or "").lower()
+    def _normalize_structured_text(self, text: str) -> str:
+        normalized = (text or "").strip()
         if not normalized:
             return ""
-        for source, target in (
+        replacements = (
             ("−", "-"),
             ("–", "-"),
             ("—", "-"),
-            ("≤", "<="),
-            ("≥", ">="),
             ("₁", "1"),
             ("₂", "2"),
             ("₃", "3"),
@@ -321,157 +295,102 @@ class GeometryPhotoSolver:
             ("₈", "8"),
             ("₉", "9"),
             ("₀", "0"),
-            ("чёрных", "черных"),
-        ):
+            ("№", "№ "),
+        )
+        for source, target in replacements:
             normalized = normalized.replace(source, target)
-        normalized = normalized.replace(",", ".")
         normalized = re.sub(r"\s+", " ", normalized)
-        return normalized.strip()
+        return normalized.lower().strip()
 
-    def _exact_isosceles_exterior_angle(self, text: str) -> str:
-        if "треугольнике abc" not in text or "ab и bc равны" not in text:
-            return ""
-        if "внешний угол" not in text or "угол c" not in text:
-            return ""
-        match = re.search(r"внешний угол[^.]*?b[^0-9]*?([0-9]+(?:\.[0-9]+)?)", text)
-        if not match:
-            return ""
-        exterior = float(match.group(1))
-        interior = 180.0 - exterior
-        answer = (180.0 - interior) / 2.0
-        return self._format_exact_numeric(answer)
-
-    def _exact_right_triangle_median(self, text: str) -> str:
-        if "прямоугольном треугольнике abc" not in text:
-            return ""
-        if "прямым углом c" not in text or "медиану ck" not in text:
-            return ""
-        ac_match = re.search(r"ac\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
-        bc_match = re.search(r"bc\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not ac_match or not bc_match:
-            return ""
-        ac_value = float(ac_match.group(1))
-        bc_value = float(bc_match.group(1))
-        hypotenuse = math.sqrt(ac_value * ac_value + bc_value * bc_value)
-        return self._format_exact_numeric(hypotenuse / 2.0)
-
-    def _exact_prism_perpendicular_lines(self, text: str) -> str:
-        if "прямая треугольная призма" not in text and "прямой треугольной призме" not in text:
-            return ""
-        if "перпендикулярные плоскости abc" not in text:
-            return ""
-        if "aa1" in text and "cc1" in text:
-            return "12"
-        return ""
-
-    def _exact_rhombus_incircle_area(self, text: str) -> str:
-        if "ромбе abcd" not in text or "радиусом" not in text or "de =" not in text:
-            return ""
-        radius_match = re.search(r"радиус(?:ом)?\s*([0-9]+(?:\.[0-9]+)?)", text)
-        de_match = re.search(r"de\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not radius_match or not de_match:
-            return ""
-        radius = float(radius_match.group(1))
-        de_value = float(de_match.group(1))
-        if de_value <= 0:
-            return ""
-        side = (radius * radius) / de_value + de_value
-        area = 2.0 * radius * side
-        return self._format_exact_numeric(area)
-
-    def _exact_regular_pyramid_sine(self, text: str) -> str:
-        if "правильной четырехугольной пирамиде" not in text and "правильной четырёхугольной пирамиде" not in text:
-            return ""
-        if "сторона основания ab равна" not in text or "ребро as равно" not in text:
-            return ""
-        side_match = re.search(r"сторона основания ab равна\s*([0-9]+(?:\.[0-9]+)?)", text)
-        edge_match = re.search(r"(?:боковое )?ребро as равно\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not side_match or not edge_match:
-            return ""
-        side = float(side_match.group(1))
-        edge = float(edge_match.group(1))
-        if edge <= 0:
-            return ""
-        cos_value = side / (2.0 * edge)
-        if cos_value < -1.0 or cos_value > 1.0:
-            return ""
-        answer = math.sqrt(max(0.0, 1.0 - cos_value * cos_value))
-        return self._format_exact_numeric(answer)
-
-    def _exact_parallelepiped_distance(self, text: str) -> str:
-        if "прямоугольном параллелепипеде" not in text or "плоскости cdk" not in text:
-            return ""
-        ad_match = re.search(r"ad\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*√\s*([0-9]+(?:\.[0-9]+)?)", text)
-        aa1_match = re.search(r"aa1\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*√\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not ad_match or not aa1_match:
-            return ""
-        ad = float(ad_match.group(1)) * math.sqrt(float(ad_match.group(2)))
-        aa1 = float(aa1_match.group(1)) * math.sqrt(float(aa1_match.group(2)))
-        denominator = math.sqrt(aa1 * aa1 + (ad * ad) / 4.0)
-        if denominator == 0:
-            return ""
-        answer = (ad * aa1 / 2.0) / denominator
-        return self._format_exact_numeric(answer)
-
-    def _exact_marker_probability(self, text: str) -> str:
-        if "красных маркеров" not in text or "черных" not in text:
-            return ""
-        match = re.search(
-            r"([0-9]+)\s+черных\s+и\s+([0-9]+)\s+красных\s+маркеров",
-            text,
+    def _extract_line_pair_options(self, text: str) -> List[Tuple[str, str, str]]:
+        options = []
+        pattern = re.compile(
+            r"(\d+)\)\s*прям(?:ая|ые)\s+([a-z]\d?[a-z]\d?)\s+и\s+([a-z]\d?[a-z]\d?)",
+            re.IGNORECASE,
         )
-        if not match:
-            return ""
-        black = float(match.group(1))
-        red = float(match.group(2))
-        total = black + red
-        if total == 0:
-            return ""
-        return self._format_exact_numeric(red / total)
+        for match in pattern.finditer(text):
+            options.append((match.group(1), match.group(2).upper(), match.group(3).upper()))
+        return options
 
-    def _exact_two_clubs_overlap(self, text: str) -> str:
-        if "25 учащ" not in text or "химическ" not in text or "биологическ" not in text:
-            return ""
-        numbers = [int(value) for value in re.findall(r"\b([0-9]+)\b", text)]
-        if len(numbers) < 3:
-            return ""
-        total = numbers[0]
-        chem = numbers[1]
-        bio = numbers[2]
-        return self._format_exact_numeric(chem + bio - total)
-
-    def _exact_interval_probability(self, text: str) -> str:
-        if "p(x <= 15)" not in text or "p(x >= 10)" not in text:
-            return ""
-        left_match = re.search(r"p\(x <= 15\)\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
-        right_match = re.search(r"p\(x >= 10\)\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not left_match or not right_match:
-            return ""
-        answer = float(left_match.group(1)) + float(right_match.group(1)) - 1.0
-        return self._format_exact_numeric(answer)
-
-    def _exact_same_color_probability(self, text: str) -> str:
-        if "красных чашек" not in text or "синих чашки" not in text or "одного цвета" not in text:
-            return ""
-        numbers = [int(value) for value in re.findall(r"\b([0-9]+)\b", text)]
-        if len(numbers) < 4:
-            return ""
-        red_cups, red_saucers, blue_cups, blue_saucers = numbers[:4]
-        total_cups = red_cups + blue_cups
-        total_saucers = red_saucers + blue_saucers
-        if total_cups == 0 or total_saucers == 0:
-            return ""
-        answer = (
-            (red_cups / float(total_cups)) * (red_saucers / float(total_saucers)) +
-            (blue_cups / float(total_cups)) * (blue_saucers / float(total_saucers))
+    def _extract_single_line_options(self, text: str) -> List[Tuple[str, str]]:
+        options = []
+        pattern = re.compile(
+            r"(\d+)\)\s*прям(?:ая|ые)\s+([a-z]\d?[a-z]\d?)",
+            re.IGNORECASE,
         )
-        return self._format_exact_numeric(answer)
+        for match in pattern.finditer(text):
+            options.append((match.group(1), match.group(2).upper()))
+        return options
 
-    def _format_exact_numeric(self, value: float) -> str:
-        rounded = round(value)
-        if abs(value - rounded) < 1e-9:
-            return str(int(rounded))
-        return ("%.10f" % value).rstrip("0").rstrip(".")
+    def _prism_coordinates(self, prism_kind: str) -> Dict[str, Tuple[float, float, float]]:
+        if prism_kind == "triangular":
+            base = {
+                "A": (0.0, 0.0, 0.0),
+                "B": (0.7, 1.0, 0.0),
+                "C": (1.8, 0.1, 0.0),
+            }
+        else:
+            base = {
+                "A": (0.0, 0.0, 0.0),
+                "B": (0.0, 1.0, 0.0),
+                "C": (1.0, 1.0, 0.0),
+                "D": (1.0, 0.0, 0.0),
+            }
+        coordinates = {}
+        for label, point in base.items():
+            coordinates[label] = point
+            coordinates[label + "1"] = (point[0], point[1], 1.0)
+        return coordinates
+
+    def _line_endpoints(self, line_name: str, coordinates: Dict[str, Tuple[float, float, float]]) -> Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+        match = re.match(r"^([A-Z]1?)([A-Z]1?)$", line_name)
+        if not match:
+            return None
+        start = coordinates.get(match.group(1))
+        end = coordinates.get(match.group(2))
+        if start is None or end is None or start == end:
+            return None
+        return start, end
+
+    def _line_perpendicular_to_base_plane(self, line_name: str, coordinates: Dict[str, Tuple[float, float, float]]) -> bool:
+        endpoints = self._line_endpoints(line_name, coordinates)
+        if not endpoints:
+            return False
+        start, end = endpoints
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        dz = end[2] - start[2]
+        return abs(dx) < 1e-9 and abs(dy) < 1e-9 and abs(dz) > 1e-9
+
+    def _lines_are_skew(self, first_line: str, second_line: str, coordinates: Dict[str, Tuple[float, float, float]]) -> bool:
+        first = self._line_endpoints(first_line, coordinates)
+        second = self._line_endpoints(second_line, coordinates)
+        if not first or not second:
+            return False
+
+        p1, p2 = first
+        q1, q2 = second
+        d1 = (p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2])
+        d2 = (q2[0] - q1[0], q2[1] - q1[1], q2[2] - q1[2])
+        cross = self._cross(d1, d2)
+        if self._norm(cross) < 1e-9:
+            return False
+        between = (q1[0] - p1[0], q1[1] - p1[1], q1[2] - p1[2])
+        triple = self._dot(between, cross)
+        return abs(triple) > 1e-9
+
+    def _cross(self, left: Tuple[float, float, float], right: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        return (
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        )
+
+    def _dot(self, left: Tuple[float, float, float], right: Tuple[float, float, float]) -> float:
+        return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+
+    def _norm(self, vector: Tuple[float, float, float]) -> float:
+        return (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]) ** 0.5
 
     def _prepare_variants(self, image_urls: List[str]) -> List[Dict[str, Optional[str]]]:
         prepared = []
@@ -1017,7 +936,7 @@ class GeometryPhotoSolver:
             return ""
         if re.search(r"[{}\\[\\]]", text):
             return ""
-        return text
+        return self._canonicalize_answer_text(text)
 
     def _is_simple_answer_candidate(self, value: str) -> bool:
         candidate = (value or "").strip().strip(".;,")
@@ -1105,6 +1024,7 @@ class GeometryPhotoSolver:
             final_answer = {"value": str(final_answer), "format": "text"}
             result["final_answer"] = final_answer
         final_answer["value"] = "" if final_answer.get("value") is None else str(final_answer.get("value"))
+        final_answer["value"] = self._canonicalize_answer_text(final_answer["value"])
         final_answer["format"] = str(final_answer.get("format") or "text")
 
         if role == "parser":
@@ -1730,6 +1650,46 @@ class GeometryPhotoSolver:
         if len(text.split()) > 5:
             return False
         return True
+
+    def _canonicalize_answer_text(self, answer: str) -> str:
+        text = (answer or "").strip()
+        if not text:
+            return ""
+
+        option_digits = self._extract_selected_option_digits(text)
+        if option_digits:
+            return option_digits
+
+        if re.match(r"^\d+(?:[\s,;]+\d+)+$", text):
+            return "".join(re.findall(r"\d+", text))
+
+        return text
+
+    def _extract_selected_option_digits(self, text: str) -> str:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) < 2:
+            return ""
+
+        selected = []
+        parsed_any = False
+        for line in lines:
+            match = re.match(r"^(\d+)\)\s*(.+)$", line)
+            if not match:
+                return ""
+            parsed_any = True
+            option = match.group(1)
+            verdict = match.group(2).strip().lower()
+
+            if re.search(r"\b(yes|true|да|верно|правильно)\b", verdict):
+                selected.append(option)
+                continue
+            if re.search(r"\b(no|false|нет|неверно|неправильно)\b", verdict):
+                continue
+            return ""
+
+        if not parsed_any or not selected:
+            return ""
+        return "".join(selected)
 
     def _can_accept_verifier_over_local_salvage(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._used_local_salvage(kimi):
