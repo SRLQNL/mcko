@@ -159,6 +159,9 @@ class GeometryPhotoSolver:
             except RecoverableProviderError as exc:
                 _log.warning("Recoverable provider failure at top-level solve path: %s", exc)
                 return "1) Не удалось определить ответ"
+            except Exception as exc:
+                _log.error("Unexpected solver failure at top-level solve path: %s", exc, exc_info=True)
+                return "1) Не удалось определить ответ"
             finally:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 _log.info("Solve pipeline finished: has_images=%s elapsed_ms=%d", bool(image_urls), elapsed_ms)
@@ -682,6 +685,13 @@ class GeometryPhotoSolver:
 
     def _normalize_result(self, raw: Dict, role: str = "generic") -> Dict:
         request_meta = raw.get("_request_meta") if isinstance(raw.get("_request_meta"), dict) else {}
+        visual_value = raw.get("visual_interpretation")
+        if not visual_value:
+            visual_value = {
+                "summary": raw.get("visual_summary") or "",
+                "confidence": self._coerce_confidence(raw.get("visual_interpretation_confidence")),
+                "possible_ambiguities": raw.get("possible_ambiguities") or [],
+            }
         result = {
             "task_type": raw.get("task_type") or "mixed_task",
             "ocr_text": raw.get("ocr_text") or "",
@@ -690,16 +700,12 @@ class GeometryPhotoSolver:
             "diagram_relations": self._normalize_relations(raw.get("diagram_relations") or raw.get("relations") or []),
             "givens": self._normalize_givens(raw.get("givens") or []),
             "target": raw.get("target") or {"statement": ""},
-            "visual_interpretation": raw.get("visual_interpretation") or {
-                "summary": raw.get("visual_summary") or "",
-                "confidence": self._coerce_confidence(raw.get("visual_interpretation_confidence")),
-                "possible_ambiguities": raw.get("possible_ambiguities") or [],
-            },
-            "reasoning_summary": raw.get("reasoning_summary") or [],
-            "solution_steps": raw.get("solution_steps") or [],
+            "visual_interpretation": visual_value,
+            "reasoning_summary": self._normalize_text_list(raw.get("reasoning_summary") or []),
+            "solution_steps": self._normalize_text_list(raw.get("solution_steps") or []),
             "final_answer": raw.get("final_answer") or {"value": "", "format": "text"},
             "answer_confidence": self._coerce_confidence(raw.get("answer_confidence")),
-            "consistency_checks": raw.get("consistency_checks") or [],
+            "consistency_checks": self._normalize_text_list(raw.get("consistency_checks") or []),
             "needs_clarification": bool(raw.get("needs_clarification", False)),
             "_request_meta": {
                 "model": str(request_meta.get("model") or ""),
@@ -721,11 +727,29 @@ class GeometryPhotoSolver:
                 "confidence": 0.5,
                 "possible_ambiguities": [],
             }
+        elif isinstance(visual, list):
+            result["visual_interpretation"] = {
+                "summary": "; ".join([str(item).strip() for item in visual if str(item).strip()])[:500],
+                "confidence": self._coerce_confidence(raw.get("visual_interpretation_confidence")),
+                "possible_ambiguities": [],
+            }
+        elif not isinstance(visual, dict):
+            result["visual_interpretation"] = {
+                "summary": str(visual).strip(),
+                "confidence": self._coerce_confidence(raw.get("visual_interpretation_confidence")),
+                "possible_ambiguities": [],
+            }
         else:
             visual["summary"] = visual.get("summary") or ""
             visual["confidence"] = self._coerce_confidence(visual.get("confidence"))
-            visual["possible_ambiguities"] = visual.get("possible_ambiguities") or []
+            visual["possible_ambiguities"] = self._normalize_text_list(visual.get("possible_ambiguities") or [])
         final_answer = result["final_answer"]
+        if isinstance(final_answer, list):
+            final_answer = {"value": "\n".join([str(item).strip() for item in final_answer if str(item).strip()]), "format": "text"}
+            result["final_answer"] = final_answer
+        elif not isinstance(final_answer, dict):
+            final_answer = {"value": str(final_answer), "format": "text"}
+            result["final_answer"] = final_answer
         final_answer["value"] = "" if final_answer.get("value") is None else str(final_answer.get("value"))
         final_answer["format"] = str(final_answer.get("format") or "text")
 
@@ -736,6 +760,20 @@ class GeometryPhotoSolver:
             result["solution_steps"] = []
 
         return result
+
+    def _normalize_text_list(self, value) -> List[str]:
+        if isinstance(value, list):
+            items = value
+        elif value:
+            items = [value]
+        else:
+            items = []
+        normalized = []
+        for item in items:
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
 
     def _fallback_parser_result(self, user_text: str, variants: List[Dict[str, Optional[str]]]) -> Dict:
         summary = "Parser fallback used because Qwen was temporarily unavailable."
@@ -1098,6 +1136,7 @@ class GeometryPhotoSolver:
 
     def _requires_quality_escalation(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         return bool(
+            consensus["score"] < 0.75 or
             self._used_repair(kimi) or
             self._solver_is_degraded(kimi) or
             self._used_repair(llama)
