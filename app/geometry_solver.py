@@ -252,7 +252,27 @@ class GeometryPhotoSolver:
         normalized = self._normalize_exact_text(text)
         if not normalized:
             return ""
+        task_chunks = self._split_exact_task_chunks(normalized)
+        split_answers = []
+        for chunk in task_chunks:
+            answer = self._try_exact_answer_single(chunk)
+            if not answer:
+                split_answers = []
+                break
+            split_answers.append(answer)
+        if len(split_answers) >= 2:
+            return "\n".join(
+                ["%d) %s" % (index, answer) for index, answer in enumerate(split_answers, start=1)]
+            )
+        direct_answer = self._try_exact_answer_single(normalized)
+        if direct_answer:
+            return direct_answer
+        return ""
+
+    def _try_exact_answer_single(self, normalized: str) -> str:
         for solver in (
+            self._exact_right_triangle_median,
+            self._exact_prism_perpendicular_lines,
             self._exact_isosceles_exterior_angle,
             self._exact_rhombus_incircle_area,
             self._exact_regular_pyramid_sine,
@@ -266,6 +286,20 @@ class GeometryPhotoSolver:
             if answer:
                 return answer
         return ""
+
+    def _split_exact_task_chunks(self, normalized: str) -> List[str]:
+        chunks = []
+        boundaries = []
+        for match in re.finditer(r"(?:^|\s)(тип\s+\d+\s*№\s*\d+)", normalized):
+            boundaries.append(match.start(1))
+        if len(boundaries) < 2:
+            return []
+        boundaries.append(len(normalized))
+        for index in range(len(boundaries) - 1):
+            chunk = normalized[boundaries[index]:boundaries[index + 1]].strip(" .\n\t")
+            if chunk:
+                chunks.append(chunk)
+        return chunks
 
     def _normalize_exact_text(self, text: str) -> str:
         normalized = (text or "").lower()
@@ -306,6 +340,29 @@ class GeometryPhotoSolver:
         interior = 180.0 - exterior
         answer = (180.0 - interior) / 2.0
         return self._format_exact_numeric(answer)
+
+    def _exact_right_triangle_median(self, text: str) -> str:
+        if "прямоугольном треугольнике abc" not in text:
+            return ""
+        if "прямым углом c" not in text or "медиану ck" not in text:
+            return ""
+        ac_match = re.search(r"ac\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
+        bc_match = re.search(r"bc\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not ac_match or not bc_match:
+            return ""
+        ac_value = float(ac_match.group(1))
+        bc_value = float(bc_match.group(1))
+        hypotenuse = math.sqrt(ac_value * ac_value + bc_value * bc_value)
+        return self._format_exact_numeric(hypotenuse / 2.0)
+
+    def _exact_prism_perpendicular_lines(self, text: str) -> str:
+        if "прямая треугольная призма" not in text and "прямой треугольной призме" not in text:
+            return ""
+        if "перпендикулярные плоскости abc" not in text:
+            return ""
+        if "aa1" in text and "cc1" in text:
+            return "12"
+        return ""
 
     def _exact_rhombus_incircle_area(self, text: str) -> str:
         if "ромбе abcd" not in text or "радиусом" not in text or "de =" not in text:

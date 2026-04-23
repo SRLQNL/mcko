@@ -371,6 +371,17 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         for text, expected in cases:
             self.assertEqual(self.solver._try_exact_answer_engine(text), expected)
 
+    def test_exact_answer_engine_solves_multi_task_sheet(self):
+        text = (
+            "Тип 11 № 611 В прямоугольном треугольнике ABC с прямым углом C известны катеты: AC = 6, BC = 8. "
+            "Найдите медиану CK этого треугольника. "
+            "Тип 12 № 87 Дана прямая треугольная призма ABCA1B1C1. Выберите из предложенного списка прямые, "
+            "перпендикулярные плоскости ABC. 1) прямая AA1 2) прямая CC1 3) прямая A1B1 4) прямая CB "
+            "В ответе запишите номера выбранных прямых без пробелов, запятых и других дополнительных символов."
+        )
+
+        self.assertEqual(self.solver._try_exact_answer_engine(text), "1) 5\n2) 12")
+
     def test_loose_terminal_answer_salvage_extracts_simple_rhs(self):
         raw = (
             "Let me solve the problem carefully.\n"
