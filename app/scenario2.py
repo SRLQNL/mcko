@@ -43,6 +43,6 @@ def handle_clipboard_hotkey(geometry_solver: GeometryPhotoSolver) -> None:
         result = geometry_solver.solve_content_blocks(content_blocks)
     except Exception as exc:
         _log.error("Geometry solver failed for clipboard content: %s", exc, exc_info=True)
-        result = "[Ошибка: %s]" % exc
+        result = "1) Не удалось определить ответ"
     cb.write_text(result)
     _log.info("Geometry solver response written to clipboard")

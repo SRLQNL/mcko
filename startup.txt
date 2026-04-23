@@ -124,7 +124,10 @@
 
   Формат хоткеев (pynput): <ctrl>, <alt>, <shift>, <space>, <f1>...<f12>, a...z
 
-Все runtime-задачи решаются через трёхмодельный GeometryPhotoSolver.
+Runtime использует два маршрута:
+- text-only → быстрый путь через Kimi 2.6
+- image / image+text → трёхмодельный GeometryPhotoSolver (Qwen → Kimi → Llama)
+
 Legacy-переменные OPENROUTER_MODEL / OPENROUTER_MODELS / SYSTEM_PROMPT_1 / SYSTEM_PROMPT_2 больше не используются.
 
 После изменения .env перезапустите приложение (kill + bash run.sh).

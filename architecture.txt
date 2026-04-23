@@ -67,11 +67,11 @@ mcko/
 │  InputField ──(Enter)──► Session.add_user()                         │
 │      │                        │                                      │
 │      │                        ▼                                      │
-│      │               GeometryPhotoSolver.solve_content_blocks()      │
+│      │               solve_content_blocks()                          │
 │      │                        │                                      │
-│      │                        ├─► Qwen  (parser / OCR)              │
-│      │                        ├─► Kimi  (primary solver)            │
-│      │                        └─► Llama (verifier)                  │
+│      │                        ├─► text-only: Kimi                   │
+│      │                        └─► image/image+text:                 │
+│      │                             Qwen → Kimi → Llama              │
 │      │                                                               │
 │      ▼                                                               │
 │  ChatView.append_assistant_chunk()                                   │
@@ -127,9 +127,11 @@ mcko/
 
   Конвейер solve_content_blocks():
     - извлекает text/image content blocks
-    - при изображении строит full/text_crop/diagram_crop варианты
-    - отправляет задачу в Qwen → Kimi → Llama
+    - если вход text-only: решает через быстрый путь Kimi
+    - если есть изображение: строит full/text_crop/diagram_crop варианты
+    - для image/image+text отправляет задачу в Qwen → Kimi → Llama
     - при недоступности parser/verifier уходит в degraded fallback
+    - сериализует solve-пайплайн для большей стабильности
     - при необходимости делает self-check round
     - наружу возвращает только answer-only строку вида "1) 69"
 

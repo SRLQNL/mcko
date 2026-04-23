@@ -5,15 +5,21 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
 import requests
 from PIL import Image
+from requests.adapters import HTTPAdapter
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 90)
-JSON_MAX_TOKENS = 2200
+PARSER_MAX_TOKENS = 1200
+SOLVER_MAX_TOKENS = 1800
+VERIFIER_MAX_TOKENS = 1200
+TEXT_ONLY_MAX_TOKENS = 1200
+REPAIR_MAX_TOKENS = 1000
 
 DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
 DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
@@ -37,6 +43,7 @@ KIMI_SYSTEM_PROMPT = (
     "Handle any domain, not only mathematics. "
     "If several independent tasks are present, solve all of them in source order. "
     "Do not let the requirement of concise final output reduce reasoning quality. "
+    "Keep reasoning_summary and solution_steps concise; they are for internal verification, not full derivations. "
     "If the task is solvable, final_answer.value must contain only the final answer content. "
     "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
     + JSON_SCHEMA_NOTE
@@ -47,6 +54,7 @@ QWEN_SYSTEM_PROMPT = (
     "Extract OCR text, task boundaries, entities, relations, givens, targets, and ambiguities. "
     "Handle any domain, not only mathematics. "
     "If several independent tasks are present, preserve their order. "
+    "Keep extracted summaries concise and avoid verbose restatement. "
     "Do not optimize for solving. Lower confidence instead of guessing. "
     "Leave final_answer empty unless the answer is explicitly printed in the source itself. "
     + JSON_SCHEMA_NOTE
@@ -58,6 +66,7 @@ LLAMA_SYSTEM_PROMPT = (
     "Handle any domain, not only mathematics. "
     "If several independent tasks are present, verify all of them in source order. "
     "Do not let the requirement of concise final output reduce reasoning quality. "
+    "Keep reasoning_summary and solution_steps concise; they are for verification only. "
     + JSON_SCHEMA_NOTE
 )
 
@@ -67,6 +76,7 @@ KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
     "Prioritize correctness over speed, but keep the output strictly structured. "
     "If several independent tasks are present, solve all of them in source order. "
     "Do not let concise final output reduce reasoning quality. "
+    "Keep reasoning_summary and solution_steps concise; they are for internal verification, not full derivations. "
     "If the task is solvable, final_answer.value must contain only the final answer content. "
     "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
     + JSON_SCHEMA_NOTE
@@ -89,6 +99,8 @@ class GeometryPhotoSolver:
         self.kimi_model = kimi_model
         self.qwen_model = qwen_model
         self.llama_model = llama_model
+        self._solve_lock = threading.Lock()
+        self._http = self._build_http_session()
         _log.info(
             "GeometryPhotoSolver initialized: kimi=%s qwen=%s llama=%s",
             self.kimi_model,
@@ -101,37 +113,59 @@ class GeometryPhotoSolver:
         if not image_urls and not user_text.strip():
             return "1) Не удалось определить ответ"
 
-        if not image_urls:
-            return self._solve_text_only(user_text)
+        started_at = time.monotonic()
+        _log.info("Waiting for solver slot: has_images=%s", bool(image_urls))
+        with self._solve_lock:
+            _log.info("Solver slot acquired: has_images=%s", bool(image_urls))
+            try:
+                if not image_urls:
+                    return self._solve_text_only(user_text)
 
-        preprocessed = self._prepare_variants(image_urls)
-        _log.info(
-            "Prepared request variants: image_count=%d auxiliary_crops=%d",
-            len(preprocessed),
-            len([variant for variant in preprocessed if variant.get("text_crop") or variant.get("diagram_crop")]),
-        )
+                preprocessed = self._prepare_variants(image_urls)
+                _log.info(
+                    "Prepared request variants: image_count=%d auxiliary_crops=%d",
+                    len(preprocessed),
+                    len([variant for variant in preprocessed if variant.get("text_crop") or variant.get("diagram_crop")]),
+                )
 
-        qwen_result = self._call_qwen(preprocessed, user_text)
-        kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
-        llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
-        consensus = self._compare_results(kimi_result, qwen_result, llama_result)
-        _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
+                qwen_result = self._call_qwen(preprocessed, user_text)
+                kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
+                llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
+                consensus = self._compare_results(kimi_result, qwen_result, llama_result)
+                _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
 
-        if self._should_run_self_check(consensus, kimi_result, llama_result):
-            mismatch_summary = self._build_mismatch_summary(consensus, kimi_result, qwen_result, llama_result)
-            _log.info("Running self-check round: %s", mismatch_summary)
-            kimi_check = self._call_kimi(preprocessed, user_text, qwen_result, mismatch_summary)
-            llama_check = self._call_llama(preprocessed, user_text, qwen_result, kimi_check, mismatch_summary)
-            consensus = self._compare_results(kimi_check, qwen_result, llama_check)
-            kimi_result = kimi_check
-            llama_result = llama_check
-            _log.info("Consensus after self-check: status=%s score=%.3f", consensus["status"], consensus["score"])
+                if self._should_run_self_check(consensus, kimi_result, llama_result):
+                    mismatch_summary = self._build_mismatch_summary(consensus, kimi_result, qwen_result, llama_result)
+                    _log.info("Running self-check round: %s", mismatch_summary)
+                    kimi_check = self._call_kimi(preprocessed, user_text, qwen_result, mismatch_summary)
+                    llama_check = self._call_llama(preprocessed, user_text, qwen_result, kimi_check, mismatch_summary)
+                    consensus = self._compare_results(kimi_check, qwen_result, llama_check)
+                    kimi_result = kimi_check
+                    llama_result = llama_check
+                    _log.info("Consensus after self-check: status=%s score=%.3f", consensus["status"], consensus["score"])
 
-        return self._format_user_result(consensus, kimi_result, qwen_result, llama_result)
+                return self._format_user_result(consensus, kimi_result, qwen_result, llama_result)
+            except RecoverableProviderError as exc:
+                _log.warning("Recoverable provider failure at top-level solve path: %s", exc)
+                return "1) Не удалось определить ответ"
+            finally:
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                _log.info("Solve pipeline finished: has_images=%s elapsed_ms=%d", bool(image_urls), elapsed_ms)
+
+    def _build_http_session(self) -> requests.Session:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=8, max_retries=0)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def _solve_text_only(self, user_text: str) -> str:
         _log.info("Using text-only fast path via Kimi")
-        kimi_result = self._call_kimi_text_only(user_text)
+        try:
+            kimi_result = self._call_kimi_text_only(user_text)
+        except RecoverableProviderError as exc:
+            _log.warning("Text-only fast path failed: %s", exc)
+            return "1) Не удалось определить ответ"
         final_answer = (kimi_result.get("final_answer") or {}).get("value", "").strip()
         if final_answer:
             _log.info("Returning text-only answer: %s", final_answer)
@@ -188,7 +222,7 @@ class GeometryPhotoSolver:
     def _call_qwen(self, variants: List[Dict[str, Optional[str]]], user_text: str) -> Dict:
         user_content = self._build_qwen_content(variants, user_text)
         try:
-            result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content)
+            result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content, max_tokens=PARSER_MAX_TOKENS)
             return self._normalize_result(result, role="parser")
         except RecoverableProviderError as exc:
             _log.warning("Qwen parser unavailable, using degraded parser fallback: %s", exc)
@@ -203,13 +237,13 @@ class GeometryPhotoSolver:
     ) -> Dict:
         user_content = self._build_kimi_content(variants, user_text, qwen_result, mismatch_summary)
         try:
-            result = self._request_json(self.kimi_model, KIMI_SYSTEM_PROMPT, user_content)
+            result = self._request_json(self.kimi_model, KIMI_SYSTEM_PROMPT, user_content, max_tokens=SOLVER_MAX_TOKENS)
             return self._normalize_result(result, role="solver")
         except RecoverableProviderError as exc:
             _log.warning("Kimi primary solver unavailable, trying degraded solver fallback: %s", exc)
             if self.llama_model != self.kimi_model:
                 try:
-                    result = self._request_json(self.llama_model, KIMI_SYSTEM_PROMPT, user_content)
+                    result = self._request_json(self.llama_model, KIMI_SYSTEM_PROMPT, user_content, max_tokens=SOLVER_MAX_TOKENS)
                     normalized = self._normalize_result(result, role="solver")
                     ambiguities = normalized["visual_interpretation"].get("possible_ambiguities") or []
                     ambiguities.append("primary solver unavailable")
@@ -223,7 +257,7 @@ class GeometryPhotoSolver:
 
     def _call_kimi_text_only(self, user_text: str) -> Dict:
         user_content = self._build_kimi_text_only_content(user_text)
-        result = self._request_json(self.kimi_model, KIMI_TEXT_ONLY_SYSTEM_PROMPT, user_content)
+        result = self._request_json(self.kimi_model, KIMI_TEXT_ONLY_SYSTEM_PROMPT, user_content, max_tokens=TEXT_ONLY_MAX_TOKENS)
         return self._normalize_result(result, role="solver")
 
     def _call_llama(
@@ -240,7 +274,7 @@ class GeometryPhotoSolver:
             return self._fallback_verifier_result(kimi_result)
         user_content = self._build_llama_content(variants, user_text, qwen_result, kimi_result, mismatch_summary)
         try:
-            result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content)
+            result = self._request_json(self.llama_model, LLAMA_SYSTEM_PROMPT, user_content, max_tokens=VERIFIER_MAX_TOKENS)
             return self._normalize_result(result, role="verifier")
         except RecoverableProviderError as exc:
             _log.warning("Llama verifier unavailable, using degraded verifier fallback: %s", exc)
@@ -368,7 +402,7 @@ class GeometryPhotoSolver:
                 content.append({"type": "image_url", "image_url": {"url": variant["diagram_crop"]}})
         return content
 
-    def _request_json(self, model: str, system_prompt: str, user_content: List[Dict]) -> Dict:
+    def _request_json(self, model: str, system_prompt: str, user_content: List[Dict], max_tokens: int) -> Dict:
         payload = {
             "model": model,
             "messages": [
@@ -376,18 +410,18 @@ class GeometryPhotoSolver:
                 {"role": "user", "content": user_content},
             ],
             "stream": False,
-            "max_tokens": JSON_MAX_TOKENS,
+            "max_tokens": max_tokens,
             "temperature": 0,
             "response_format": {"type": "json_object"},
             "provider": {"allow_fallbacks": True},
         }
-        _log.info("Requesting task JSON: model=%s blocks=%d", model, len(user_content))
+        _log.info("Requesting task JSON: model=%s blocks=%d max_tokens=%d", model, len(user_content), max_tokens)
         response = None
         last_error = None
         for attempt in range(1, 3):
             started_at = time.monotonic()
             try:
-                response = requests.post(
+                response = self._http.post(
                     ENDPOINT,
                     headers={
                         "Authorization": "Bearer %s" % self.api_key,
@@ -464,7 +498,7 @@ class GeometryPhotoSolver:
             "Original output:\n%s" % (JSON_SCHEMA_NOTE, raw_text)
         )
         _log.info("Requesting JSON repair pass: model=%s", model)
-        response = requests.post(
+        response = self._http.post(
             ENDPOINT,
             headers={
                 "Authorization": "Bearer %s" % self.api_key,
@@ -477,7 +511,7 @@ class GeometryPhotoSolver:
                     {"role": "user", "content": [{"type": "text", "text": repair_prompt}]},
                 ],
                 "stream": False,
-                "max_tokens": 1800,
+                "max_tokens": REPAIR_MAX_TOKENS,
                 "temperature": 0,
                 "response_format": {"type": "json_object"},
                 "provider": {"allow_fallbacks": True},
