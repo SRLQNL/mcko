@@ -16,9 +16,9 @@ from requests.adapters import HTTPAdapter
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 90)
 PARSER_MAX_TOKENS = 1200
-SOLVER_MAX_TOKENS = 1800
-VERIFIER_MAX_TOKENS = 1200
-TEXT_ONLY_MAX_TOKENS = 1200
+SOLVER_MAX_TOKENS = 1400
+VERIFIER_MAX_TOKENS = 1000
+TEXT_ONLY_MAX_TOKENS = 900
 REPAIR_MAX_TOKENS = 1000
 ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
@@ -32,12 +32,19 @@ RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
 
 _log = logging.getLogger("mcko.geometry_solver")
 
-JSON_SCHEMA_NOTE = (
+PARSER_JSON_SCHEMA_NOTE = (
     'Return one valid JSON object with keys: '
     '"task_type","ocr_text","normalized_problem_text","diagram_entities","diagram_relations",'
     '"givens","target","visual_interpretation","reasoning_summary","solution_steps",'
     '"final_answer","answer_confidence","consistency_checks","needs_clarification". '
     'Use double quotes. No markdown. No prose outside JSON.'
+)
+
+SOLVER_JSON_SCHEMA_NOTE = (
+    'Return one valid JSON object with keys: '
+    '"task_type","normalized_problem_text","diagram_relations","givens","target",'
+    '"visual_interpretation","final_answer","answer_confidence","consistency_checks","needs_clarification". '
+    'Keep arrays short. Use double quotes. No markdown. No prose outside JSON.'
 )
 
 KIMI_SYSTEM_PROMPT = (
@@ -47,10 +54,10 @@ KIMI_SYSTEM_PROMPT = (
     "Handle any domain, not only mathematics. "
     "If several independent tasks are present, solve all of them in source order. "
     "Do not let the requirement of concise final output reduce reasoning quality. "
-    "Keep reasoning_summary and solution_steps concise; they are for internal verification, not full derivations. "
+    "Do not emit full derivations or long reasoning text. "
     "If the task is solvable, final_answer.value must contain only the final answer content. "
     "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
-    + JSON_SCHEMA_NOTE
+    + SOLVER_JSON_SCHEMA_NOTE
 )
 
 QWEN_SYSTEM_PROMPT = (
@@ -61,7 +68,7 @@ QWEN_SYSTEM_PROMPT = (
     "Keep extracted summaries concise and avoid verbose restatement. "
     "Do not optimize for solving. Lower confidence instead of guessing. "
     "Leave final_answer empty unless the answer is explicitly printed in the source itself. "
-    + JSON_SCHEMA_NOTE
+    + PARSER_JSON_SCHEMA_NOTE
 )
 
 LLAMA_SYSTEM_PROMPT = (
@@ -70,8 +77,8 @@ LLAMA_SYSTEM_PROMPT = (
     "Handle any domain, not only mathematics. "
     "If several independent tasks are present, verify all of them in source order. "
     "Do not let the requirement of concise final output reduce reasoning quality. "
-    "Keep reasoning_summary and solution_steps concise; they are for verification only. "
-    + JSON_SCHEMA_NOTE
+    "Do not emit full derivations or long reasoning text. "
+    + SOLVER_JSON_SCHEMA_NOTE
 )
 
 KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
@@ -80,10 +87,10 @@ KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
     "Prioritize correctness over speed, but keep the output strictly structured. "
     "If several independent tasks are present, solve all of them in source order. "
     "Do not let concise final output reduce reasoning quality. "
-    "Keep reasoning_summary and solution_steps concise; they are for internal verification, not full derivations. "
+    "Do not emit full derivations or long reasoning text. "
     "If the task is solvable, final_answer.value must contain only the final answer content. "
     "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
-    + JSON_SCHEMA_NOTE
+    + SOLVER_JSON_SCHEMA_NOTE
 )
 
 
@@ -297,14 +304,14 @@ class GeometryPhotoSolver:
                 "Extract OCR text, task boundaries, entities, relations, givens, targets, ambiguities, and confidence.\n"
                 "The images may contain one task or several independent tasks. Preserve their order.\n"
                 "Do not solve unless needed for normalization.\n"
-                "%s" % JSON_SCHEMA_NOTE
+                "%s" % PARSER_JSON_SCHEMA_NOTE
             )
         else:
             text_prompt = (
                 "Parse the user text task into strict JSON.\n"
                 "Extract task boundaries, givens, target, inferred entities, relations, ambiguities, and confidence.\n"
                 "Do not optimize for solving.\n"
-                "%s" % JSON_SCHEMA_NOTE
+                "%s" % PARSER_JSON_SCHEMA_NOTE
             )
         if user_text:
             text_prompt += "\nUser hint:\n%s" % user_text
@@ -327,8 +334,8 @@ class GeometryPhotoSolver:
                 "Use the Qwen parse as a helper, but correct it if the source clearly disagrees.\n"
                 "The materials may contain several independent tasks; solve all of them in source order.\n"
                 "Prioritize correct interpretation over aggressive solving.\n"
-                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
-                "%s\n" % JSON_SCHEMA_NOTE
+                "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
@@ -336,8 +343,8 @@ class GeometryPhotoSolver:
                 "Use the Qwen parse as a helper, but reason independently.\n"
                 "If several independent tasks are present, solve all of them in order.\n"
                 "Prioritize faithful interpretation of the source.\n"
-                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
-                "%s\n" % JSON_SCHEMA_NOTE
+                "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
@@ -363,16 +370,16 @@ class GeometryPhotoSolver:
                 "Verify the user task from the attached text and images and return strict JSON.\n"
                 "Check the interpretation, targets, and final answer for all tasks in order.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
-                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
-                "%s\n" % JSON_SCHEMA_NOTE
+                "Return a compact JSON object focused on inconsistencies, confidence, and final answer.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
         else:
             prompt = (
                 "Verify the user text task and return strict JSON.\n"
                 "Check the target, reasoning, and final answer.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
-                "Keep full reasoning inside solution_steps and reasoning_summary.\n"
-                "%s\n" % JSON_SCHEMA_NOTE
+                "Return a compact JSON object focused on inconsistencies, confidence, and final answer.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
@@ -390,8 +397,8 @@ class GeometryPhotoSolver:
             "Solve the user text task and return strict JSON.\n"
             "If several independent tasks are present, solve all of them in order.\n"
             "Prioritize faithful interpretation of the text.\n"
-            "Keep full reasoning inside solution_steps and reasoning_summary.\n"
-            "%s\n" % JSON_SCHEMA_NOTE
+            "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
+            "%s\n" % SOLVER_JSON_SCHEMA_NOTE
         )
         if user_text:
             prompt += "User task:\n%s\n" % user_text
@@ -488,10 +495,18 @@ class GeometryPhotoSolver:
             _log.warning("Primary JSON parse failed for model=%s chars=%d: %s", model, len(raw_text), exc)
             parsed = None
             repair_error = None
+            salvaged = self._try_salvage_answer_only(raw_text)
+            if salvaged is not None:
+                parsed = salvaged
+                used_repair = True
+                repair_model = "local_answer_salvage"
+                _log.info("Local answer salvage succeeded: source_model=%s", model)
             repair_models = [model]
             if self.llama_model not in repair_models:
                 repair_models.append(self.llama_model)
             for candidate_model in repair_models:
+                if parsed is not None:
+                    break
                 try:
                     repaired_text = self._repair_non_json_response(candidate_model, raw_text, source_model=model)
                     parsed = self._extract_json_object(repaired_text)
@@ -540,7 +555,7 @@ class GeometryPhotoSolver:
         repair_prompt = (
             "Convert the following model output into one strict JSON object without losing meaning.\n"
             "%s\n"
-            "Original output:\n%s" % (JSON_SCHEMA_NOTE, raw_text)
+            "Original output:\n%s" % (SOLVER_JSON_SCHEMA_NOTE, raw_text)
         )
         _log.info("Requesting JSON repair pass: source_model=%s repair_model=%s", source_model, model)
         response = self._http.post(
@@ -575,6 +590,95 @@ class GeometryPhotoSolver:
         if not repaired_text.strip():
             raise ValueError("JSON repair returned empty content")
         return repaired_text
+
+    def _try_salvage_answer_only(self, raw_text: str) -> Optional[Dict]:
+        text = (raw_text or "").strip()
+        if not text:
+            return None
+
+        answer = ""
+        numbered_block = self._extract_numbered_answer_block(text)
+        if numbered_block:
+            answer = numbered_block
+        else:
+            for pattern in (
+                r"(?im)^\s*final[_\s-]*answer\s*[:=-]\s*(.+?)\s*$",
+                r"(?im)^\s*answer\s*[:=-]\s*(.+?)\s*$",
+                r"(?im)^\s*итог(?:овый)?\s*ответ\s*[:=-]\s*(.+?)\s*$",
+                r"(?im)^\s*ответ\s*[:=-]\s*(.+?)\s*$",
+            ):
+                match = re.search(pattern, text)
+                if match:
+                    answer = match.group(1).strip()
+                    break
+
+        answer = self._normalize_salvaged_answer(answer)
+        if not answer:
+            return None
+
+        confidence = self._extract_salvaged_confidence(text)
+        needs_clarification = bool(re.search(r"(?i)\b(ambiguous|unclear|need clarification|insufficient data)\b", text))
+        return {
+            "task_type": "mixed_task",
+            "normalized_problem_text": "",
+            "diagram_relations": [],
+            "givens": [],
+            "target": {"statement": ""},
+            "visual_interpretation": {
+                "summary": "Recovered final answer from non-JSON model output.",
+                "confidence": confidence,
+                "possible_ambiguities": ["recovered from non-json output"],
+            },
+            "final_answer": {"value": answer, "format": "text"},
+            "answer_confidence": confidence,
+            "consistency_checks": [],
+            "needs_clarification": needs_clarification,
+        }
+
+    def _extract_numbered_answer_block(self, text: str) -> str:
+        lines = [line.rstrip() for line in text.splitlines()]
+        collected = []
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped:
+                if collected:
+                    break
+                continue
+            if re.match(r"^\d+\)\s+\S", stripped):
+                collected.append(stripped)
+                continue
+            if collected:
+                break
+        if not collected:
+            return ""
+        collected.reverse()
+        return "\n".join(collected)
+
+    def _normalize_salvaged_answer(self, answer: str) -> str:
+        text = (answer or "").strip().strip("`").strip()
+        if not text:
+            return ""
+        if len(text) > 200:
+            return ""
+        text = re.sub(r"(?i)^(final[_\s-]*answer|answer|итог(?:овый)?\s*ответ|ответ)\s*[:=-]\s*", "", text).strip()
+        text = re.sub(r"\s+$", "", text)
+        if not text:
+            return ""
+        if re.search(r"[{}\\[\\]]", text):
+            return ""
+        return text
+
+    def _extract_salvaged_confidence(self, text: str) -> float:
+        match = re.search(r"(?im)^\s*(?:answer_)?confidence\s*[:=-]\s*([0-9]+(?:\.[0-9]+)?)\s*$", text)
+        if match:
+            return self._coerce_confidence(match.group(1))
+        if re.search(r"(?i)\bhigh confidence\b", text):
+            return 0.85
+        if re.search(r"(?i)\bmedium confidence\b", text):
+            return 0.65
+        if re.search(r"(?i)\blow confidence\b", text):
+            return 0.35
+        return 0.7
 
     def _normalize_result(self, raw: Dict, role: str = "generic") -> Dict:
         request_meta = raw.get("_request_meta") if isinstance(raw.get("_request_meta"), dict) else {}
@@ -994,7 +1098,6 @@ class GeometryPhotoSolver:
 
     def _requires_quality_escalation(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         return bool(
-            consensus["score"] < 0.92 or
             self._used_repair(kimi) or
             self._solver_is_degraded(kimi) or
             self._used_repair(llama)

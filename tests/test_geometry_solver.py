@@ -86,6 +86,25 @@ class GeometrySolverConsensusTests(unittest.TestCase):
 
         self.assertEqual(final_answer, "42")
 
+    def test_answer_salvage_recovers_numbered_output_without_remote_repair(self):
+        salvaged = self.solver._try_salvage_answer_only(
+            "I will solve both tasks carefully.\n\n1) 69\n2) 42\n"
+        )
+
+        self.assertIsNotNone(salvaged)
+        self.assertEqual(salvaged["final_answer"]["value"], "1) 69\n2) 42")
+        self.assertIn("recovered from non-json output", salvaged["visual_interpretation"]["possible_ambiguities"])
+
+    def test_clean_accepted_case_does_not_trigger_extra_self_check(self):
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        kimi = self._make_result(answer="69", answer_confidence=0.95)
+        llama = self._make_result(answer="69", answer_confidence=0.93)
+
+        consensus = self.solver._compare_results(kimi, qwen, llama)
+
+        self.assertEqual(consensus["status"], "accepted")
+        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
+
 
 if __name__ == "__main__":
     unittest.main()
