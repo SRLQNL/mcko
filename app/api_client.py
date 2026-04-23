@@ -38,7 +38,9 @@ class APIClient:
             return "[Ошибка конфигурации: не задана модель OpenRouter]"
 
         has_images = any(isinstance(message.get("content"), list) for message in messages)
-        full_messages = [{"role": "system", "content": system_prompt}] + messages
+        full_messages = list(messages)
+        if system_prompt.strip():
+            full_messages = [{"role": "system", "content": system_prompt}] + full_messages
         payload = {
             "model": self.model,
             "messages": full_messages,

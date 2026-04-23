@@ -60,6 +60,13 @@ def main():
     def _is_api_error_text(text: str) -> bool:
         return text.startswith("[Ошибка ") or text.startswith("\n[Ошибка ")
 
+    def _prepare_api_content(content_blocks: list, has_images: bool):
+        if not has_images:
+            if len(content_blocks) == 1 and content_blocks[0].get("type") == "text":
+                return content_blocks[0]["text"]
+            return content_blocks
+        return content_blocks
+
     def on_send(content_blocks: list) -> None:
         """Called when user submits a message from the chat window."""
         logger.info("User submitted message: %d blocks", len(content_blocks))
@@ -76,10 +83,7 @@ def main():
         display_text = " ".join(text_parts) if text_parts else "[изображение]"
 
         chat_window.chat_view.append_user(display_text)
-        if len(content_blocks) == 1 and content_blocks[0].get("type") == "text":
-            api_content = content_blocks[0]["text"]
-        else:
-            api_content = content_blocks
+        api_content = _prepare_api_content(content_blocks, has_images)
         if has_images:
             request_messages = [{"role": "user", "content": api_content}]
             logger.info("Using stateless request path for image content")
@@ -96,14 +100,18 @@ def main():
             full_text = ""
             had_stream_error = False
             try:
+                use_stream = not has_images
                 result = api_client.send(
                     system_prompt=config.system_prompt_1,
                     messages=request_messages,
-                    stream=True,
+                    stream=use_stream,
                 )
                 if isinstance(result, str):
+                    if _is_api_error_text(result):
+                        had_stream_error = True
+                    else:
+                        full_text = result
                     root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
-                    had_stream_error = True
                 else:
                     for chunk in result:
                         if _is_api_error_text(chunk):
@@ -113,7 +121,7 @@ def main():
                         full_text += chunk
                         root.after(0, lambda t=chunk: chat_window.chat_view.append_assistant_chunk(t))
 
-                if not full_text:
+                if use_stream and not full_text:
                     logger.warning(
                         "Stream returned no assistant content, retrying non-stream request: has_images=%s stream_error=%s",
                         has_images,
