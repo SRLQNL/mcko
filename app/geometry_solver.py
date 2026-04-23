@@ -699,7 +699,7 @@ class GeometryPhotoSolver:
             "diagram_entities": self._normalize_entities(raw.get("diagram_entities") or raw.get("objects") or []),
             "diagram_relations": self._normalize_relations(raw.get("diagram_relations") or raw.get("relations") or []),
             "givens": self._normalize_givens(raw.get("givens") or []),
-            "target": raw.get("target") or {"statement": ""},
+            "target": self._normalize_target(raw.get("target")),
             "visual_interpretation": visual_value,
             "reasoning_summary": self._normalize_text_list(raw.get("reasoning_summary") or []),
             "solution_steps": self._normalize_text_list(raw.get("solution_steps") or []),
@@ -716,8 +716,6 @@ class GeometryPhotoSolver:
             "_solver_origin": str(raw.get("_solver_origin") or "model"),
             "_mirrors_solver": bool(raw.get("_mirrors_solver", False)),
         }
-        if isinstance(result["target"], str):
-            result["target"] = {"statement": result["target"]}
         if isinstance(result["final_answer"], str):
             result["final_answer"] = {"value": result["final_answer"], "format": "text"}
         visual = result["visual_interpretation"]
@@ -760,6 +758,39 @@ class GeometryPhotoSolver:
             result["solution_steps"] = []
 
         return result
+
+    def _normalize_target(self, value) -> Dict[str, str]:
+        if isinstance(value, dict):
+            statement = value.get("statement")
+            if statement:
+                return {"statement": str(statement)}
+            parts = []
+            for key, item in value.items():
+                part = "%s: %s" % (key, item)
+                if part.strip():
+                    parts.append(part)
+            return {"statement": "; ".join(parts)}
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, dict):
+                    statement = item.get("statement")
+                    if statement:
+                        parts.append(str(statement))
+                    else:
+                        flattened = []
+                        for key, subvalue in item.items():
+                            flattened.append("%s: %s" % (key, subvalue))
+                        if flattened:
+                            parts.append("; ".join(flattened))
+                else:
+                    text = str(item).strip()
+                    if text:
+                        parts.append(text)
+            return {"statement": " | ".join(parts)}
+        if value is None:
+            return {"statement": ""}
+        return {"statement": str(value)}
 
     def _normalize_text_list(self, value) -> List[str]:
         if isinstance(value, list):

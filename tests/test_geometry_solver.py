@@ -124,6 +124,7 @@ class GeometrySolverConsensusTests(unittest.TestCase):
     def test_normalize_result_handles_list_visual_and_list_answer(self):
         normalized = self.solver._normalize_result(
             {
+                "target": ["find area", {"statement": "of the circle"}],
                 "visual_interpretation": ["repaired visual note", "second note"],
                 "final_answer": ["1) 12", "2) 13"],
                 "consistency_checks": "checked",
@@ -133,6 +134,7 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             role="solver",
         )
 
+        self.assertEqual(normalized["target"]["statement"], "find area | of the circle")
         self.assertEqual(normalized["visual_interpretation"]["summary"], "repaired visual note; second note")
         self.assertEqual(normalized["final_answer"]["value"], "1) 12\n2) 13")
         self.assertEqual(normalized["consistency_checks"], ["checked"])
