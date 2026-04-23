@@ -61,6 +61,17 @@ LLAMA_SYSTEM_PROMPT = (
     + JSON_SCHEMA_NOTE
 )
 
+KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
+    "You are the primary solver for user text tasks. "
+    "Reason as fully as needed internally before deciding on the answer. "
+    "Prioritize correctness over speed, but keep the output strictly structured. "
+    "If several independent tasks are present, solve all of them in source order. "
+    "Do not let concise final output reduce reasoning quality. "
+    "If the task is solvable, final_answer.value must contain only the final answer content. "
+    "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
+    + JSON_SCHEMA_NOTE
+)
+
 
 class RecoverableProviderError(RuntimeError):
     """Provider failure that parser/verifier may degrade around."""
@@ -90,6 +101,9 @@ class GeometryPhotoSolver:
         if not image_urls and not user_text.strip():
             return "1) Не удалось определить ответ"
 
+        if not image_urls:
+            return self._solve_text_only(user_text)
+
         preprocessed = self._prepare_variants(image_urls)
         _log.info(
             "Prepared request variants: image_count=%d auxiliary_crops=%d",
@@ -114,6 +128,16 @@ class GeometryPhotoSolver:
             _log.info("Consensus after self-check: status=%s score=%.3f", consensus["status"], consensus["score"])
 
         return self._format_user_result(consensus, kimi_result, qwen_result, llama_result)
+
+    def _solve_text_only(self, user_text: str) -> str:
+        _log.info("Using text-only fast path via Kimi")
+        kimi_result = self._call_kimi_text_only(user_text)
+        final_answer = (kimi_result.get("final_answer") or {}).get("value", "").strip()
+        if final_answer:
+            _log.info("Returning text-only answer: %s", final_answer)
+            return self._render_answer_only(final_answer)
+        _log.warning("Text-only fast path produced no answer")
+        return "1) Не удалось определить ответ"
 
     def _extract_image_payload(self, content_blocks: List[Dict]) -> Tuple[List[str], str]:
         image_urls = []
@@ -196,6 +220,11 @@ class GeometryPhotoSolver:
                 except RecoverableProviderError as degraded_exc:
                     _log.warning("Degraded solver fallback via verifier model failed: %s", degraded_exc)
             return self._fallback_solver_result(user_text, qwen_result)
+
+    def _call_kimi_text_only(self, user_text: str) -> Dict:
+        user_content = self._build_kimi_text_only_content(user_text)
+        result = self._request_json(self.kimi_model, KIMI_TEXT_ONLY_SYSTEM_PROMPT, user_content)
+        return self._normalize_result(result, role="solver")
 
     def _call_llama(
         self,
@@ -312,6 +341,18 @@ class GeometryPhotoSolver:
         content = [{"type": "text", "text": prompt}]
         content.extend(self._build_image_blocks(variants))
         return content
+
+    def _build_kimi_text_only_content(self, user_text: str) -> List[Dict]:
+        prompt = (
+            "Solve the user text task and return strict JSON.\n"
+            "If several independent tasks are present, solve all of them in order.\n"
+            "Prioritize faithful interpretation of the text.\n"
+            "Keep full reasoning inside solution_steps and reasoning_summary.\n"
+            "%s\n" % JSON_SCHEMA_NOTE
+        )
+        if user_text:
+            prompt += "User task:\n%s\n" % user_text
+        return [{"type": "text", "text": prompt}]
 
     def _build_image_blocks(self, variants: List[Dict[str, Optional[str]]]) -> List[Dict]:
         content = []
@@ -699,6 +740,8 @@ class GeometryPhotoSolver:
     def _should_run_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if consensus["status"] == "accepted":
             return False
+        if self._answers_effectively_match(kimi, llama):
+            return False
         if consensus["status"] == "self_check":
             return True
         kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
@@ -748,7 +791,7 @@ class GeometryPhotoSolver:
         if consensus["status"] == "accepted":
             return kimi_answer or llama_answer
 
-        answers_match = bool(kimi_answer) and self._normalize_answer_text(kimi_answer) == self._normalize_answer_text(llama_answer)
+        answers_match = self._answers_effectively_match(kimi, llama)
         parser_unavailable = "parser unavailable" in (qwen.get("visual_interpretation") or {}).get("possible_ambiguities", [])
         verifier_unavailable = bool(
             llama and "verifier unavailable" in (llama.get("visual_interpretation") or {}).get("possible_ambiguities", [])
@@ -996,6 +1039,15 @@ class GeometryPhotoSolver:
         if lines:
             return "\n".join(lines)
         return self._normalize_text(text)
+
+    def _answers_effectively_match(self, kimi: Dict, llama: Optional[Dict]) -> bool:
+        kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
+        if not kimi_answer or llama is None:
+            return False
+        llama_answer = (llama.get("final_answer") or {}).get("value", "").strip()
+        if not llama_answer:
+            return False
+        return self._normalize_answer_text(kimi_answer) == self._normalize_answer_text(llama_answer)
 
     def _data_url_to_bytes(self, data_url: str) -> Optional[bytes]:
         if not data_url.startswith("data:image/"):
