@@ -214,6 +214,20 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             consensus = self.solver._compare_results(kimi, qwen, llama)
             self.assertIn(consensus["status"], ("accepted", "self_check", "ambiguous"))
 
+    def test_kimi_repair_uses_llama_repair_only(self):
+        repair_models = self.solver._repair_models_for_source(self.solver.kimi_model)
+        self.assertEqual(repair_models, [self.solver.llama_model])
+
+    def test_repaired_matching_answers_can_skip_expensive_self_check(self):
+        kimi = self._make_result(answer="80", answer_confidence=0.82, used_repair=True)
+        llama = self._make_result(answer="80", answer_confidence=0.78)
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+
+        consensus = self.solver._compare_results(kimi, qwen, llama)
+
+        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
+        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
 DIRECT_SOLVER_CONFIDENCE_THRESHOLD = 0.85
 TIE_BREAK_CONFIDENCE_GAP = 0.15
+REPAIRED_MATCH_CONFIDENCE_THRESHOLD = 0.60
 
 DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
 DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
@@ -504,9 +505,7 @@ class GeometryPhotoSolver:
                 used_repair = True
                 repair_model = "local_answer_salvage"
                 _log.info("Local answer salvage succeeded: source_model=%s", model)
-            repair_models = [model]
-            if self.llama_model not in repair_models:
-                repair_models.append(self.llama_model)
+            repair_models = self._repair_models_for_source(model)
             for candidate_model in repair_models:
                 if parsed is not None:
                     break
@@ -546,6 +545,16 @@ class GeometryPhotoSolver:
             repair_model or "-",
         )
         return parsed
+
+    def _repair_models_for_source(self, model: str) -> List[str]:
+        if model == self.kimi_model:
+            if self.llama_model == self.kimi_model:
+                return [self.kimi_model]
+            return [self.llama_model]
+        repair_models = [model]
+        if self.llama_model not in repair_models:
+            repair_models.append(self.llama_model)
+        return repair_models
 
     def _is_retryable_status(self, status_code: int) -> bool:
         return status_code in RETRYABLE_STATUSES
@@ -1043,6 +1052,8 @@ class GeometryPhotoSolver:
     def _should_run_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._has_independent_verifier(llama):
             return False
+        if self._can_accept_repaired_match_without_self_check(consensus, kimi, llama):
+            return False
         if consensus["status"] == "accepted" and not self._requires_quality_escalation(consensus, kimi, llama):
             return False
         if consensus["status"] == "accepted":
@@ -1116,6 +1127,10 @@ class GeometryPhotoSolver:
                 return kimi_answer
             return ""
 
+        if self._can_accept_repaired_match_without_self_check(consensus, kimi, llama):
+            _log.info("Accepting repaired solver answer because independent verifier matches and parser is clear")
+            return kimi_answer or llama_answer
+
         if answers_match and parser_clear and not solver_degraded and not solver_repaired and consensus["score"] >= SELF_CHECK_SCORE_THRESHOLD:
             _log.info("Accepting answer after non-accepted consensus because independent solver and verifier match under clear parse")
             return kimi_answer
@@ -1172,6 +1187,28 @@ class GeometryPhotoSolver:
             self._solver_is_degraded(kimi) or
             self._used_repair(llama)
         )
+
+    def _can_accept_repaired_match_without_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
+        if not self._used_repair(kimi):
+            return False
+        if self._solver_is_degraded(kimi):
+            return False
+        if not self._has_independent_verifier(llama):
+            return False
+        if not self._answers_effectively_match(kimi, llama):
+            return False
+        qwen_like_clear = True
+        kimi_visual = kimi.get("visual_interpretation") or {}
+        ambiguities = kimi_visual.get("possible_ambiguities") or []
+        if "recovered from non-json output" in ambiguities:
+            qwen_like_clear = False
+        kimi_confidence = self._coerce_confidence(kimi.get("answer_confidence"))
+        llama_confidence = self._coerce_confidence((llama or {}).get("answer_confidence"))
+        if kimi_confidence < REPAIRED_MATCH_CONFIDENCE_THRESHOLD and llama_confidence < REPAIRED_MATCH_CONFIDENCE_THRESHOLD:
+            return False
+        if consensus.get("answer_agreement", 0.0) < 1.0:
+            return False
+        return qwen_like_clear
 
     def _render_answer_only(self, final_answer: str) -> str:
         answer = (final_answer or "").strip()
