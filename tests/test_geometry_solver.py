@@ -139,6 +139,81 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertEqual(normalized["final_answer"]["value"], "1) 12\n2) 13")
         self.assertEqual(normalized["consistency_checks"], ["checked"])
 
+    def test_normalize_result_survives_common_repair_shape_variants(self):
+        variants = [
+            {
+                "target": "find x",
+                "visual_interpretation": "clear diagram",
+                "final_answer": "42",
+                "givens": "ab = cd",
+                "diagram_relations": "parallel(ab,cd)",
+            },
+            {
+                "target": ["find area", {"statement": "of figure"}],
+                "visual_interpretation": ["blurred text", "cropped lower figure"],
+                "final_answer": ["1) 12", "2) 13"],
+                "givens": [{"a": 1}, {"statement": "b = 2"}],
+                "diagram_relations": [{"type": "touches", "subject": "circle", "object": "side"}],
+            },
+            {
+                "target": {"value": "radius"},
+                "visual_interpretation": {"summary": "repaired", "confidence": "0.7", "possible_ambiguities": "none"},
+                "final_answer": {"value": 3.14, "format": "text"},
+                "givens": {"r": 4},
+                "diagram_relations": [{"broken": "shape"}],
+            },
+            {
+                "target": None,
+                "visual_interpretation": 123,
+                "final_answer": 99,
+                "givens": None,
+                "diagram_relations": None,
+            },
+        ]
+
+        for raw in variants:
+            normalized = self.solver._normalize_result(raw, role="solver")
+            self.assertIsInstance(normalized["target"], dict)
+            self.assertIn("statement", normalized["target"])
+            self.assertIsInstance(normalized["visual_interpretation"], dict)
+            self.assertIsInstance(normalized["final_answer"], dict)
+            self.assertIsInstance(normalized["givens"], list)
+            self.assertIsInstance(normalized["diagram_relations"], list)
+
+    def test_compare_results_survives_repaired_shape_variants(self):
+        qwen = self.solver._normalize_result(
+            {
+                "target": {"statement": "find area"},
+                "givens": [{"statement": "side=4"}],
+                "diagram_relations": [{"type": "parallel", "subject": "ab", "object": "cd"}],
+                "visual_interpretation": {"summary": "clear", "confidence": 0.9, "possible_ambiguities": []},
+                "final_answer": {"value": "", "format": "text"},
+            },
+            role="parser",
+        )
+        repaired_solver_payloads = [
+            {
+                "target": ["find area", "of figure"],
+                "givens": {"side": 4},
+                "diagram_relations": "parallel(ab,cd)",
+                "visual_interpretation": ["repaired visual"],
+                "final_answer": ["16"],
+            },
+            {
+                "target": {"goal": "find area"},
+                "givens": "side=4",
+                "diagram_relations": [{"type": "parallel", "subject": "ab", "object": "cd"}],
+                "visual_interpretation": 0,
+                "final_answer": 16,
+            },
+        ]
+
+        for raw in repaired_solver_payloads:
+            kimi = self.solver._normalize_result(raw, role="solver")
+            llama = self.solver._normalize_result(raw, role="verifier")
+            consensus = self.solver._compare_results(kimi, qwen, llama)
+            self.assertIn(consensus["status"], ("accepted", "self_check", "ambiguous"))
+
 
 if __name__ == "__main__":
     unittest.main()
