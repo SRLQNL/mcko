@@ -103,7 +103,7 @@ class GeometryPhotoSolver:
         consensus = self._compare_results(kimi_result, qwen_result, llama_result)
         _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
 
-        if consensus["status"] == "self_check":
+        if self._should_run_self_check(consensus, kimi_result, llama_result):
             mismatch_summary = self._build_mismatch_summary(consensus, kimi_result, qwen_result, llama_result)
             _log.info("Running self-check round: %s", mismatch_summary)
             kimi_check = self._call_kimi(preprocessed, user_text, qwen_result, mismatch_summary)
@@ -650,7 +650,7 @@ class GeometryPhotoSolver:
         qwen_givens = self._jaccard(self._given_keys(kimi), self._given_keys(qwen))
         llama_givens = self._jaccard(self._given_keys(kimi), self._given_keys(llama))
         target_agreement = 1.0 if self._normalize_text(kimi["target"].get("statement", "")) == self._normalize_text(qwen["target"].get("statement", "")) else 0.0
-        answer_agreement = 1.0 if self._normalize_text(kimi["final_answer"].get("value", "")) == self._normalize_text(llama["final_answer"].get("value", "")) else 0.0
+        answer_agreement = 1.0 if self._normalize_answer_text(kimi["final_answer"].get("value", "")) == self._normalize_answer_text(llama["final_answer"].get("value", "")) else 0.0
 
         diagram_agreement = (qwen_diagram + llama_diagram) / 2.0
         givens_agreement = (qwen_givens + llama_givens) / 2.0
@@ -696,6 +696,17 @@ class GeometryPhotoSolver:
             "reasons": reasons,
         }
 
+    def _should_run_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
+        if consensus["status"] == "accepted":
+            return False
+        if consensus["status"] == "self_check":
+            return True
+        kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
+        llama_answer = ""
+        if llama is not None:
+            llama_answer = (llama.get("final_answer") or {}).get("value", "").strip()
+        return bool(kimi_answer or llama_answer)
+
     def _build_mismatch_summary(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Dict) -> str:
         parts = [
             "consensus_score=%.3f" % consensus["score"],
@@ -728,13 +739,16 @@ class GeometryPhotoSolver:
     def _pick_user_answer(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
         kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
         llama_answer = ""
+        llama_confidence = 0.0
         if llama is not None:
             llama_answer = (llama.get("final_answer") or {}).get("value", "").strip()
+            llama_confidence = self._coerce_confidence(llama.get("answer_confidence"))
+        kimi_confidence = self._coerce_confidence(kimi.get("answer_confidence"))
 
         if consensus["status"] == "accepted":
             return kimi_answer or llama_answer
 
-        answers_match = bool(kimi_answer) and self._normalize_text(kimi_answer) == self._normalize_text(llama_answer)
+        answers_match = bool(kimi_answer) and self._normalize_answer_text(kimi_answer) == self._normalize_answer_text(llama_answer)
         parser_unavailable = "parser unavailable" in (qwen.get("visual_interpretation") or {}).get("possible_ambiguities", [])
         verifier_unavailable = bool(
             llama and "verifier unavailable" in (llama.get("visual_interpretation") or {}).get("possible_ambiguities", [])
@@ -748,8 +762,28 @@ class GeometryPhotoSolver:
             _log.info("Accepting Kimi answer because verifier is unavailable")
             return kimi_answer
 
+        if kimi_answer and not llama_answer:
+            _log.info("Accepting Kimi answer because verifier did not provide a competing answer")
+            return kimi_answer
+
+        if llama_answer and not kimi_answer:
+            _log.info("Accepting verifier answer because primary solver did not provide an answer")
+            return llama_answer
+
+        if kimi_answer and llama_answer:
+            if kimi_confidence >= llama_confidence + 0.15:
+                _log.info("Accepting Kimi answer on confidence tie-break: kimi=%.3f llama=%.3f", kimi_confidence, llama_confidence)
+                return kimi_answer
+            if llama_confidence >= kimi_confidence + 0.15:
+                _log.info("Accepting verifier answer on confidence tie-break: kimi=%.3f llama=%.3f", kimi_confidence, llama_confidence)
+                return llama_answer
+
         if kimi_answer and consensus["status"] == "self_check" and not parser_unavailable and not qwen.get("needs_clarification"):
             _log.info("Accepting Kimi answer after self-check because parser did not report unresolved ambiguity")
+            return kimi_answer
+
+        if kimi_answer and not parser_unavailable and not qwen.get("needs_clarification"):
+            _log.info("Accepting Kimi answer despite ambiguous consensus because parser did not flag unresolved ambiguity")
             return kimi_answer
 
         return ""
@@ -945,6 +979,23 @@ class GeometryPhotoSolver:
         if text is None:
             return ""
         return " ".join(str(text).strip().lower().split())
+
+    def _normalize_answer_text(self, text: str) -> str:
+        if text is None:
+            return ""
+        lines = []
+        for raw_line in str(text).splitlines():
+            line = raw_line.strip().lower()
+            if not line:
+                continue
+            line = re.sub(r"^\d+\)\s*", "", line)
+            line = re.sub(r"^ответ[:\s-]*", "", line)
+            line = " ".join(line.split())
+            if line:
+                lines.append(line)
+        if lines:
+            return "\n".join(lines)
+        return self._normalize_text(text)
 
     def _data_url_to_bytes(self, data_url: str) -> Optional[bytes]:
         if not data_url.startswith("data:image/"):
