@@ -1,6 +1,7 @@
 import signal
 import sys
 import threading
+import time
 
 from app.logger import logger
 from app.config import Config
@@ -48,6 +49,18 @@ def main():
     from ui.window import ChatWindow
 
     pending_window_toggle = {"job": None}
+    screenshot_hotkey_state = {"last_trigger_at": 0.0}
+    screenshot_hotkey_suppress_seconds = 1.0
+
+    def _should_suppress_window_hotkey() -> bool:
+        elapsed = time.monotonic() - screenshot_hotkey_state["last_trigger_at"]
+        if elapsed < screenshot_hotkey_suppress_seconds:
+            logger.info(
+                "Suppressing window/show hotkey because screenshot hotkey fired %.3fs ago",
+                elapsed,
+            )
+            return True
+        return False
 
     def _is_api_error_text(text: str) -> bool:
         return text.startswith("[Ошибка ") or text.startswith("\n[Ошибка ")
@@ -126,6 +139,8 @@ def main():
 
     # ── Hotkeys ──────────────────────────────────────────────────────────────
     def on_window_hotkey():
+        if _should_suppress_window_hotkey():
+            return
         logger.info("Window hotkey dispatched to main thread (toggle)")
         def _run_toggle():
             logger.info("Executing delayed window toggle")
@@ -143,6 +158,8 @@ def main():
         logger.info("Scheduled window toggle in 120ms")
 
     def on_show_hotkey():
+        if _should_suppress_window_hotkey():
+            return
         logger.info("Show hotkey dispatched to main thread")
         def _run_show():
             # Отменяем pending toggle только если окно СКРЫТО:
@@ -169,6 +186,7 @@ def main():
 
     def on_screenshot_hotkey():
         logger.info("Screenshot hotkey triggered")
+        screenshot_hotkey_state["last_trigger_at"] = time.monotonic()
         from app.screenshot import take_screenshot
         png_bytes = take_screenshot()
         if png_bytes:

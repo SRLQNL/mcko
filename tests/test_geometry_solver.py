@@ -248,14 +248,14 @@ class GeometrySolverConsensusTests(unittest.TestCase):
 
         self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "0.8")
 
-    def test_high_confidence_verifier_can_fill_missing_solver_answer(self):
+    def test_verifier_only_answer_is_rejected_when_solver_has_no_answer(self):
         qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[], needs_clarification=True)
         kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
         llama = self._make_result(answer="6", answer_confidence=0.91)
 
         consensus = self.solver._compare_results(kimi, qwen, llama)
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "6")
+        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "")
 
     def test_compact_result_for_prompt_truncates_large_payloads(self):
         result = self._make_result(answer="80", answer_confidence=0.91)

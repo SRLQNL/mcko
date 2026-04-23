@@ -1238,12 +1238,13 @@ class GeometryPhotoSolver:
             return ""
 
         if llama_answer and not kimi_answer:
-            if parser_clear and (
-                consensus["score"] >= ACCEPT_SCORE_THRESHOLD or
-                self._coerce_confidence((llama or {}).get("answer_confidence")) >= 0.75
-            ):
-                _log.info("Accepting verifier answer because primary solver did not provide an answer")
-                return llama_answer
+            _log.warning(
+                "Rejecting verifier-only answer because primary solver did not provide a stable answer: "
+                "status=%s score=%.3f verifier_confidence=%.3f",
+                consensus["status"],
+                consensus["score"],
+                llama_confidence,
+            )
             return ""
 
         if kimi_answer and llama_answer and parser_clear and not solver_degraded and not solver_repaired:
