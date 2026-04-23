@@ -80,8 +80,12 @@ def main():
             api_content = content_blocks[0]["text"]
         else:
             api_content = content_blocks
-        session.add_user(api_content)
-        history = session.get_history()
+        if has_images:
+            request_messages = [{"role": "user", "content": api_content}]
+            logger.info("Using stateless request path for image content")
+        else:
+            session.add_user(api_content)
+            request_messages = session.get_history()
 
         chat_window.chat_view.begin_assistant()
         # Disable input while waiting for response
@@ -94,7 +98,7 @@ def main():
             try:
                 result = api_client.send(
                     system_prompt=config.system_prompt_1,
-                    messages=history,
+                    messages=request_messages,
                     stream=True,
                 )
                 if isinstance(result, str):
@@ -117,7 +121,7 @@ def main():
                     )
                     fallback_text = api_client.send(
                         system_prompt=config.system_prompt_1,
-                        messages=history,
+                        messages=request_messages,
                         stream=False,
                     )
                     if isinstance(fallback_text, str) and fallback_text:
@@ -134,7 +138,8 @@ def main():
             finally:
                 root.after(0, chat_window.chat_view.end_assistant)
                 if full_text:
-                    session.add_assistant(full_text)
+                    if not has_images:
+                        session.add_assistant(full_text)
                     logger.info(
                         "Streaming response complete: %d chars (stream_error=%s)",
                         len(full_text),
