@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 REQUIRED_FIELDS = ["OPENROUTER_API_KEY"]
 
 DEFAULTS = {
-    "OPENROUTER_MODEL": "qwen/qwen2.5-vl-72b-instruct",
+    "OPENROUTER_MODEL": "x-ai/grok-4.1-fast",
     "SYSTEM_PROMPT_1": "",
     "SYSTEM_PROMPT_2": "",
     "HOTKEY_WINDOW": "<ctrl>+<space>",
