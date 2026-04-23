@@ -228,6 +228,47 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
         self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
 
+    def test_verifier_can_override_local_salvage_mismatch(self):
+        kimi = self._make_result(answer="8", answer_confidence=0.7, used_repair=True)
+        kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
+        llama = self._make_result(answer="80", answer_confidence=0.9)
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+
+        consensus = self.solver._compare_results(kimi, qwen, llama)
+
+        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
+        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
+
+    def test_compact_result_for_prompt_truncates_large_payloads(self):
+        result = self._make_result(answer="80", answer_confidence=0.91)
+        result["normalized_problem_text"] = "x" * 2000
+        result["ocr_text"] = "y" * 2000
+        result["givens"] = [{"statement": "g" * 200}] * 10
+        result["diagram_relations"] = ["r" * 200] * 10
+        result["visual_interpretation"] = {
+            "summary": "s" * 500,
+            "confidence": 0.8,
+            "possible_ambiguities": ["a" * 100] * 10,
+        }
+        compact = self.solver._compact_result_for_prompt(result, role="solver")
+        parser_compact = self.solver._compact_result_for_prompt(result, role="parser")
+
+        self.assertLessEqual(len(compact["normalized_problem_text"]), 700)
+        self.assertLessEqual(len(parser_compact["ocr_text"]), 600)
+        self.assertLessEqual(len(compact["givens"]), 6)
+        self.assertLessEqual(len(compact["diagram_relations"]), 6)
+        self.assertLessEqual(len(compact["visual_interpretation"]["possible_ambiguities"]), 4)
+
+    def test_loose_terminal_answer_salvage_extracts_simple_rhs(self):
+        raw = (
+            "Let me solve the problem carefully.\n"
+            "We obtain side = 10.\n"
+            "Area = 80.\n"
+        )
+        salvaged = self.solver._try_salvage_answer_only(raw)
+        self.assertIsNotNone(salvaged)
+        self.assertEqual(salvaged["final_answer"]["value"], "80")
+
 
 if __name__ == "__main__":
     unittest.main()

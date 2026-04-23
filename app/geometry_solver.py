@@ -16,9 +16,9 @@ from requests.adapters import HTTPAdapter
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 90)
 PARSER_MAX_TOKENS = 1200
-SOLVER_MAX_TOKENS = 1400
-VERIFIER_MAX_TOKENS = 1000
-TEXT_ONLY_MAX_TOKENS = 900
+SOLVER_MAX_TOKENS = 1100
+VERIFIER_MAX_TOKENS = 700
+TEXT_ONLY_MAX_TOKENS = 700
 REPAIR_MAX_TOKENS = 1000
 ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
@@ -352,7 +352,10 @@ class GeometryPhotoSolver:
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
-        prompt += "Qwen parse:\n%s\n" % json.dumps(qwen_result, ensure_ascii=False)
+        prompt += "Qwen parse:\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(qwen_result, role="parser"),
+            ensure_ascii=False,
+        )
         if mismatch_summary:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
@@ -387,8 +390,14 @@ class GeometryPhotoSolver:
             )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
-        prompt += "Qwen parse:\n%s\n" % json.dumps(qwen_result, ensure_ascii=False)
-        prompt += "Kimi result:\n%s\n" % json.dumps(kimi_result, ensure_ascii=False)
+        prompt += "Qwen parse:\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(qwen_result, role="parser"),
+            ensure_ascii=False,
+        )
+        prompt += "Kimi result:\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(kimi_result, role="solver"),
+            ensure_ascii=False,
+        )
         if mismatch_summary:
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
@@ -623,6 +632,8 @@ class GeometryPhotoSolver:
                 if match:
                     answer = match.group(1).strip()
                     break
+        if not answer:
+            answer = self._extract_loose_terminal_answer(text)
 
         answer = self._normalize_salvaged_answer(answer)
         if not answer:
@@ -666,6 +677,31 @@ class GeometryPhotoSolver:
         collected.reverse()
         return "\n".join(collected)
 
+    def _extract_loose_terminal_answer(self, text: str) -> str:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        tail_lines = lines[-12:]
+
+        for line in reversed(tail_lines):
+            match = re.search(r"=\s*([-+A-Za-z0-9.,/]+)\s*[.]?$", line)
+            if match:
+                candidate = match.group(1).strip()
+                if self._is_simple_answer_candidate(candidate):
+                    return candidate
+
+        cue_patterns = (
+            r"(?i)\b(?:therefore|thus|hence|so|finally|result)\b[^.\n]{0,80}?\b(?:is|=)\s*([-+A-Za-z0-9.,/]+)",
+            r"(?i)\b(?:итак|следовательно|значит|получаем)\b[^.\n]{0,80}?\b(?:=|это)\s*([-+A-Za-z0-9.,/]+)",
+        )
+        tail_text = "\n".join(tail_lines)
+        for pattern in cue_patterns:
+            match = re.search(pattern, tail_text)
+            if match:
+                candidate = match.group(1).strip()
+                if self._is_simple_answer_candidate(candidate):
+                    return candidate
+
+        return ""
+
     def _normalize_salvaged_answer(self, answer: str) -> str:
         text = (answer or "").strip().strip("`").strip()
         if not text:
@@ -673,12 +709,21 @@ class GeometryPhotoSolver:
         if len(text) > 200:
             return ""
         text = re.sub(r"(?i)^(final[_\s-]*answer|answer|итог(?:овый)?\s*ответ|ответ)\s*[:=-]\s*", "", text).strip()
+        text = text.rstrip(".;,")
         text = re.sub(r"\s+$", "", text)
         if not text:
             return ""
         if re.search(r"[{}\\[\\]]", text):
             return ""
         return text
+
+    def _is_simple_answer_candidate(self, value: str) -> bool:
+        candidate = (value or "").strip().strip(".;,")
+        if not candidate or len(candidate) > 40:
+            return False
+        if re.match(r"^[A-Za-z]$", candidate):
+            return False
+        return bool(re.match(r"^[-+A-Za-z0-9.,/]+$", candidate))
 
     def _extract_salvaged_confidence(self, text: str) -> float:
         match = re.search(r"(?im)^\s*(?:answer_)?confidence\s*[:=-]\s*([0-9]+(?:\.[0-9]+)?)\s*$", text)
@@ -814,6 +859,52 @@ class GeometryPhotoSolver:
             if text:
                 normalized.append(text)
         return normalized
+
+    def _compact_result_for_prompt(self, result: Dict, role: str) -> Dict:
+        compact = {
+            "task_type": result.get("task_type") or "mixed_task",
+            "normalized_problem_text": self._truncate_text(result.get("normalized_problem_text") or "", 700),
+            "target": self._normalize_target(result.get("target")),
+            "givens": self._truncate_statements(result.get("givens") or [], limit=6, width=120),
+            "diagram_relations": self._truncate_text_list(result.get("diagram_relations") or [], limit=6, width=80),
+            "visual_interpretation": {
+                "summary": self._truncate_text(((result.get("visual_interpretation") or {}).get("summary") or ""), 220),
+                "confidence": self._coerce_confidence((result.get("visual_interpretation") or {}).get("confidence")),
+                "possible_ambiguities": self._truncate_text_list(
+                    ((result.get("visual_interpretation") or {}).get("possible_ambiguities") or []),
+                    limit=4,
+                    width=80,
+                ),
+            },
+            "needs_clarification": bool(result.get("needs_clarification", False)),
+        }
+        if role == "parser":
+            compact["ocr_text"] = self._truncate_text(result.get("ocr_text") or "", 600)
+        else:
+            compact["final_answer"] = {
+                "value": self._truncate_text(((result.get("final_answer") or {}).get("value") or ""), 80),
+                "format": str(((result.get("final_answer") or {}).get("format") or "text")),
+            }
+            compact["answer_confidence"] = self._coerce_confidence(result.get("answer_confidence"))
+            compact["consistency_checks"] = self._truncate_text_list(result.get("consistency_checks") or [], limit=4, width=100)
+        return compact
+
+    def _truncate_text(self, text: str, width: int) -> str:
+        normalized = str(text or "").strip()
+        if len(normalized) <= width:
+            return normalized
+        return normalized[: max(0, width - 1)].rstrip() + "…"
+
+    def _truncate_text_list(self, value, limit: int, width: int) -> List[str]:
+        items = self._normalize_text_list(value)
+        return [self._truncate_text(item, width) for item in items[:limit]]
+
+    def _truncate_statements(self, givens, limit: int, width: int) -> List[Dict]:
+        normalized = self._normalize_givens(givens)
+        trimmed = []
+        for item in normalized[:limit]:
+            trimmed.append({"statement": self._truncate_text(item.get("statement") or "", width)})
+        return trimmed
 
     def _fallback_parser_result(self, user_text: str, variants: List[Dict[str, Optional[str]]]) -> Dict:
         summary = "Parser fallback used because Qwen was temporarily unavailable."
@@ -1052,6 +1143,8 @@ class GeometryPhotoSolver:
     def _should_run_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._has_independent_verifier(llama):
             return False
+        if self._can_accept_verifier_over_local_salvage(consensus, kimi, llama):
+            return False
         if self._can_accept_repaired_match_without_self_check(consensus, kimi, llama):
             return False
         if consensus["status"] == "accepted" and not self._requires_quality_escalation(consensus, kimi, llama):
@@ -1131,6 +1224,10 @@ class GeometryPhotoSolver:
             _log.info("Accepting repaired solver answer because independent verifier matches and parser is clear")
             return kimi_answer or llama_answer
 
+        if self._can_accept_verifier_over_local_salvage(consensus, kimi, llama):
+            _log.info("Accepting verifier answer because local answer salvage conflicts with independent verifier")
+            return llama_answer
+
         if answers_match and parser_clear and not solver_degraded and not solver_repaired and consensus["score"] >= SELF_CHECK_SCORE_THRESHOLD:
             _log.info("Accepting answer after non-accepted consensus because independent solver and verifier match under clear parse")
             return kimi_answer
@@ -1167,6 +1264,12 @@ class GeometryPhotoSolver:
         request_meta = result.get("_request_meta") or {}
         return bool(request_meta.get("used_repair", False))
 
+    def _used_local_salvage(self, result: Optional[Dict]) -> bool:
+        if not result:
+            return False
+        request_meta = result.get("_request_meta") or {}
+        return request_meta.get("repair_model") == "local_answer_salvage"
+
     def _solver_is_degraded(self, result: Optional[Dict]) -> bool:
         if not result:
             return False
@@ -1191,6 +1294,8 @@ class GeometryPhotoSolver:
     def _can_accept_repaired_match_without_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._used_repair(kimi):
             return False
+        if self._used_local_salvage(kimi):
+            return False
         if self._solver_is_degraded(kimi):
             return False
         if not self._has_independent_verifier(llama):
@@ -1209,6 +1314,20 @@ class GeometryPhotoSolver:
         if consensus.get("answer_agreement", 0.0) < 1.0:
             return False
         return qwen_like_clear
+
+    def _can_accept_verifier_over_local_salvage(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
+        if not self._used_local_salvage(kimi):
+            return False
+        if not self._has_independent_verifier(llama):
+            return False
+        if self._answers_effectively_match(kimi, llama):
+            return False
+        llama_answer = ((llama or {}).get("final_answer") or {}).get("value", "").strip()
+        if not llama_answer:
+            return False
+        if self._coerce_confidence((llama or {}).get("answer_confidence")) < 0.75:
+            return False
+        return True
 
     def _render_answer_only(self, final_answer: str) -> str:
         answer = (final_answer or "").strip()
