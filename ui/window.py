@@ -211,6 +211,29 @@ class ChatWindow:
         _log.info("Submit from InputField: %d content blocks", len(content_blocks))
         self._on_send(content_blocks)
 
+    def insert_image_bytes(self, img_bytes: bytes) -> None:
+        """Insert an image into the input field without surfacing a hidden window."""
+        if not self._input_field:
+            _log.warning("Image insert skipped: input field is not ready")
+            return
+
+        was_visible = self._visible
+        if not was_visible:
+            _log.info("Inserting image into hidden window without changing visibility")
+
+        self._input_field.insert_image_label(img_bytes)
+
+        if not was_visible:
+            def _keep_hidden() -> None:
+                try:
+                    self._window.withdraw()
+                    _log.debug("Re-withdrew chat window after hidden image insert")
+                except tk.TclError as exc:
+                    _log.warning("Failed to keep chat window hidden after image insert: %s", exc)
+
+            self._window.after_idle(_keep_hidden)
+            self._window.after(50, _keep_hidden)
+
     def _focus_input(self) -> None:
         """Форсируем фокус через Xlib XSetInputFocus (минует WM, работает с overrideredirect)."""
         # Сначала Tkinter-методы

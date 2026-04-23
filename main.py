@@ -173,7 +173,7 @@ def main():
         png_bytes = take_screenshot()
         if png_bytes:
             logger.info("Screenshot ready (%d bytes), inserting into input field", len(png_bytes))
-            root.after(0, lambda b=png_bytes: chat_window._input_field._insert_image_label(b))
+            root.after(0, lambda b=png_bytes: chat_window.insert_image_bytes(b))
         else:
             logger.error("Screenshot failed, nothing to insert")
 

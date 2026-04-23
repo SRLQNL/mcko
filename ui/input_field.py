@@ -134,6 +134,14 @@ class InputField(tk.Text):
         self.configure(height=MIN_INPUT_LINES)
         _log.info("InputField cleared")
 
+    def insert_image_label(self, img_bytes: bytes) -> None:
+        """Insert an image label at the current cursor position."""
+        self._insert_image_label(img_bytes)
+        try:
+            self.mark_set(tk.INSERT, tk.END)
+        except tk.TclError as exc:
+            _log.warning("Failed to move insert cursor after image insert: %s", exc)
+
     def focus(self) -> None:
         self.focus_set()
 

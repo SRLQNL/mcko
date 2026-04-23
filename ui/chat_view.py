@@ -37,6 +37,7 @@ class ChatView(tk.Text):
         self.bind("<MouseWheel>", self._on_mousewheel)
         self.bind("<Button-4>", self._on_mousewheel_linux_up)
         self.bind("<Button-5>", self._on_mousewheel_linux_down)
+        self._assistant_placeholder_active = False
 
         # Tags
         self.tag_configure("user_label", foreground="#a8afb2", font=(FONT_FAMILY, FONT_SIZE, "bold"))
@@ -63,20 +64,31 @@ class ChatView(tk.Text):
     def begin_assistant(self) -> None:
         """Start a new assistant response block (call before streaming chunks)."""
         _log.info("Beginning assistant response block")
-        self._write("", "ai_text")
+        self._assistant_placeholder_active = True
+        self._write("...", "ai_text")
 
     def append_assistant_chunk(self, chunk: str) -> None:
         """Append a streaming chunk to the current assistant response."""
+        if self._assistant_placeholder_active:
+            self.configure(state=tk.NORMAL)
+            try:
+                self.delete("end-4c", "end-1c")
+            finally:
+                self.configure(state=tk.DISABLED)
+            self._assistant_placeholder_active = False
         self._write(chunk, "ai_text")
 
     def end_assistant(self) -> None:
         """Finalize the assistant response block."""
+        if self._assistant_placeholder_active:
+            self._assistant_placeholder_active = False
         self._write("\n", "ai_text")
         _log.info("Assistant response block ended")
 
     def clear(self) -> None:
         """Clear all chat content."""
         _log.info("ChatView cleared")
+        self._assistant_placeholder_active = False
         self.configure(state=tk.NORMAL)
         self.delete("1.0", tk.END)
         self.configure(state=tk.DISABLED)
