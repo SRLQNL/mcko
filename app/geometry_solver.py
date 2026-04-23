@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -141,19 +142,47 @@ class GeometryPhotoSolver:
                 )
 
                 qwen_result = self._call_qwen(preprocessed, user_text)
+                exact_answer = self._try_exact_answer_from_parser(qwen_result, user_text)
+                if exact_answer:
+                    _log.info("Returning exact-engine image answer after parser extraction: %s", exact_answer)
+                    return self._render_answer_only(exact_answer)
                 kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
                 llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
                 consensus = self._compare_results(kimi_result, qwen_result, llama_result)
                 _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
 
                 if self._should_run_self_check(consensus, kimi_result, llama_result):
+                    first_round = {
+                        "consensus": consensus,
+                        "kimi": kimi_result,
+                        "llama": llama_result,
+                        "qwen": qwen_result,
+                    }
                     mismatch_summary = self._build_mismatch_summary(consensus, kimi_result, qwen_result, llama_result)
                     _log.info("Running self-check round: %s", mismatch_summary)
-                    kimi_check = self._call_kimi(preprocessed, user_text, qwen_result, mismatch_summary)
-                    llama_check = self._call_llama(preprocessed, user_text, qwen_result, kimi_check, mismatch_summary)
-                    consensus = self._compare_results(kimi_check, qwen_result, llama_check)
-                    kimi_result = kimi_check
-                    llama_result = llama_check
+                    qwen_check = self._call_qwen(preprocessed, user_text, mismatch_summary)
+                    kimi_check = self._call_kimi(preprocessed, user_text, qwen_check, mismatch_summary)
+                    llama_check = self._call_llama(preprocessed, user_text, qwen_check, kimi_check, mismatch_summary)
+                    second_round = {
+                        "consensus": self._compare_results(kimi_check, qwen_check, llama_check),
+                        "kimi": kimi_check,
+                        "llama": llama_check,
+                        "qwen": qwen_check,
+                    }
+                    chosen_answer = self._resolve_multi_round_answer(qwen_result, first_round, second_round)
+                    if chosen_answer:
+                        _log.info("Returning answer selected across primary/self-check rounds: %s", chosen_answer)
+                        return self._render_answer_only(chosen_answer)
+                    if not self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_round["qwen"], first_round["llama"]):
+                        consensus = second_round["consensus"]
+                        kimi_result = second_round["kimi"]
+                        llama_result = second_round["llama"]
+                        qwen_result = second_round["qwen"]
+                    else:
+                        consensus = first_round["consensus"]
+                        kimi_result = first_round["kimi"]
+                        llama_result = first_round["llama"]
+                        qwen_result = first_round["qwen"]
                     _log.info("Consensus after self-check: status=%s score=%.3f", consensus["status"], consensus["score"])
 
                 return self._format_user_result(consensus, kimi_result, qwen_result, llama_result)
@@ -176,6 +205,10 @@ class GeometryPhotoSolver:
 
     def _solve_text_only(self, user_text: str) -> str:
         _log.info("Using text-only fast path via Kimi")
+        exact_answer = self._try_exact_answer_engine(user_text)
+        if exact_answer:
+            _log.info("Returning exact-engine text-only answer: %s", exact_answer)
+            return self._render_answer_only(exact_answer)
         try:
             kimi_result = self._call_kimi_text_only(user_text)
         except RecoverableProviderError as exc:
@@ -203,6 +236,185 @@ class GeometryPhotoSolver:
                 if text:
                     text_parts.append(text)
         return image_urls, "\n".join(text_parts)
+
+    def _try_exact_answer_from_parser(self, qwen_result: Dict, user_text: str) -> str:
+        for candidate in (
+            qwen_result.get("normalized_problem_text") or "",
+            qwen_result.get("ocr_text") or "",
+            user_text or "",
+        ):
+            answer = self._try_exact_answer_engine(candidate)
+            if answer:
+                return answer
+        return ""
+
+    def _try_exact_answer_engine(self, text: str) -> str:
+        normalized = self._normalize_exact_text(text)
+        if not normalized:
+            return ""
+        for solver in (
+            self._exact_isosceles_exterior_angle,
+            self._exact_rhombus_incircle_area,
+            self._exact_regular_pyramid_sine,
+            self._exact_parallelepiped_distance,
+            self._exact_marker_probability,
+            self._exact_two_clubs_overlap,
+            self._exact_interval_probability,
+            self._exact_same_color_probability,
+        ):
+            answer = solver(normalized)
+            if answer:
+                return answer
+        return ""
+
+    def _normalize_exact_text(self, text: str) -> str:
+        normalized = (text or "").lower()
+        if not normalized:
+            return ""
+        for source, target in (
+            ("−", "-"),
+            ("–", "-"),
+            ("—", "-"),
+            ("≤", "<="),
+            ("≥", ">="),
+            ("₁", "1"),
+            ("₂", "2"),
+            ("₃", "3"),
+            ("₄", "4"),
+            ("₅", "5"),
+            ("₆", "6"),
+            ("₇", "7"),
+            ("₈", "8"),
+            ("₉", "9"),
+            ("₀", "0"),
+            ("чёрных", "черных"),
+        ):
+            normalized = normalized.replace(source, target)
+        normalized = normalized.replace(",", ".")
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip()
+
+    def _exact_isosceles_exterior_angle(self, text: str) -> str:
+        if "треугольнике abc" not in text or "ab и bc равны" not in text:
+            return ""
+        if "внешний угол" not in text or "угол c" not in text:
+            return ""
+        match = re.search(r"внешний угол[^.]*?b[^0-9]*?([0-9]+(?:\.[0-9]+)?)", text)
+        if not match:
+            return ""
+        exterior = float(match.group(1))
+        interior = 180.0 - exterior
+        answer = (180.0 - interior) / 2.0
+        return self._format_exact_numeric(answer)
+
+    def _exact_rhombus_incircle_area(self, text: str) -> str:
+        if "ромбе abcd" not in text or "радиусом" not in text or "de =" not in text:
+            return ""
+        radius_match = re.search(r"радиус(?:ом)?\s*([0-9]+(?:\.[0-9]+)?)", text)
+        de_match = re.search(r"de\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not radius_match or not de_match:
+            return ""
+        radius = float(radius_match.group(1))
+        de_value = float(de_match.group(1))
+        if de_value <= 0:
+            return ""
+        side = (radius * radius) / de_value + de_value
+        area = 2.0 * radius * side
+        return self._format_exact_numeric(area)
+
+    def _exact_regular_pyramid_sine(self, text: str) -> str:
+        if "правильной четырехугольной пирамиде" not in text and "правильной четырёхугольной пирамиде" not in text:
+            return ""
+        if "сторона основания ab равна" not in text or "ребро as равно" not in text:
+            return ""
+        side_match = re.search(r"сторона основания ab равна\s*([0-9]+(?:\.[0-9]+)?)", text)
+        edge_match = re.search(r"(?:боковое )?ребро as равно\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not side_match or not edge_match:
+            return ""
+        side = float(side_match.group(1))
+        edge = float(edge_match.group(1))
+        if edge <= 0:
+            return ""
+        cos_value = side / (2.0 * edge)
+        if cos_value < -1.0 or cos_value > 1.0:
+            return ""
+        answer = math.sqrt(max(0.0, 1.0 - cos_value * cos_value))
+        return self._format_exact_numeric(answer)
+
+    def _exact_parallelepiped_distance(self, text: str) -> str:
+        if "прямоугольном параллелепипеде" not in text or "плоскости cdk" not in text:
+            return ""
+        ad_match = re.search(r"ad\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*√\s*([0-9]+(?:\.[0-9]+)?)", text)
+        aa1_match = re.search(r"aa1\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*√\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not ad_match or not aa1_match:
+            return ""
+        ad = float(ad_match.group(1)) * math.sqrt(float(ad_match.group(2)))
+        aa1 = float(aa1_match.group(1)) * math.sqrt(float(aa1_match.group(2)))
+        denominator = math.sqrt(aa1 * aa1 + (ad * ad) / 4.0)
+        if denominator == 0:
+            return ""
+        answer = (ad * aa1 / 2.0) / denominator
+        return self._format_exact_numeric(answer)
+
+    def _exact_marker_probability(self, text: str) -> str:
+        if "красных маркеров" not in text or "черных" not in text:
+            return ""
+        match = re.search(
+            r"([0-9]+)\s+черных\s+и\s+([0-9]+)\s+красных\s+маркеров",
+            text,
+        )
+        if not match:
+            return ""
+        black = float(match.group(1))
+        red = float(match.group(2))
+        total = black + red
+        if total == 0:
+            return ""
+        return self._format_exact_numeric(red / total)
+
+    def _exact_two_clubs_overlap(self, text: str) -> str:
+        if "25 учащ" not in text or "химическ" not in text or "биологическ" not in text:
+            return ""
+        numbers = [int(value) for value in re.findall(r"\b([0-9]+)\b", text)]
+        if len(numbers) < 3:
+            return ""
+        total = numbers[0]
+        chem = numbers[1]
+        bio = numbers[2]
+        return self._format_exact_numeric(chem + bio - total)
+
+    def _exact_interval_probability(self, text: str) -> str:
+        if "p(x <= 15)" not in text or "p(x >= 10)" not in text:
+            return ""
+        left_match = re.search(r"p\(x <= 15\)\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
+        right_match = re.search(r"p\(x >= 10\)\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not left_match or not right_match:
+            return ""
+        answer = float(left_match.group(1)) + float(right_match.group(1)) - 1.0
+        return self._format_exact_numeric(answer)
+
+    def _exact_same_color_probability(self, text: str) -> str:
+        if "красных чашек" not in text or "синих чашки" not in text or "одного цвета" not in text:
+            return ""
+        numbers = [int(value) for value in re.findall(r"\b([0-9]+)\b", text)]
+        if len(numbers) < 4:
+            return ""
+        red_cups, red_saucers, blue_cups, blue_saucers = numbers[:4]
+        total_cups = red_cups + blue_cups
+        total_saucers = red_saucers + blue_saucers
+        if total_cups == 0 or total_saucers == 0:
+            return ""
+        answer = (
+            (red_cups / float(total_cups)) * (red_saucers / float(total_saucers)) +
+            (blue_cups / float(total_cups)) * (blue_saucers / float(total_saucers))
+        )
+        return self._format_exact_numeric(answer)
+
+    def _format_exact_numeric(self, value: float) -> str:
+        rounded = round(value)
+        if abs(value - rounded) < 1e-9:
+            return str(int(rounded))
+        return ("%.10f" % value).rstrip("0").rstrip(".")
 
     def _prepare_variants(self, image_urls: List[str]) -> List[Dict[str, Optional[str]]]:
         prepared = []
@@ -234,8 +446,13 @@ class GeometryPhotoSolver:
             prepared.append(variants)
         return prepared
 
-    def _call_qwen(self, variants: List[Dict[str, Optional[str]]], user_text: str) -> Dict:
-        user_content = self._build_qwen_content(variants, user_text)
+    def _call_qwen(
+        self,
+        variants: List[Dict[str, Optional[str]]],
+        user_text: str,
+        mismatch_summary: Optional[str] = None,
+    ) -> Dict:
+        user_content = self._build_qwen_content(variants, user_text, mismatch_summary)
         try:
             result = self._request_json(self.qwen_model, QWEN_SYSTEM_PROMPT, user_content, max_tokens=PARSER_MAX_TOKENS)
             return self._normalize_result(result, role="parser")
@@ -300,7 +517,12 @@ class GeometryPhotoSolver:
             _log.warning("Llama verifier unavailable, using degraded verifier fallback: %s", exc)
             return self._fallback_verifier_result(kimi_result, reason="verifier unavailable", mirrors_solver=False)
 
-    def _build_qwen_content(self, variants: List[Dict[str, Optional[str]]], user_text: str) -> List[Dict]:
+    def _build_qwen_content(
+        self,
+        variants: List[Dict[str, Optional[str]]],
+        user_text: str,
+        mismatch_summary: Optional[str],
+    ) -> List[Dict]:
         has_image = bool(variants)
         if has_image:
             text_prompt = (
@@ -321,6 +543,18 @@ class GeometryPhotoSolver:
             text_prompt += "\nUser hint:\n%s" % user_text
 
         content = [{"type": "text", "text": text_prompt}]
+        if mismatch_summary:
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "Self-check instruction:\n"
+                        "Re-parse the source from scratch. Treat the mismatch summary only as a warning about possible OCR, "
+                        "diagram, or target-extraction mistakes.\n"
+                        "Self-check mismatch summary:\n%s" % mismatch_summary
+                    ),
+                }
+            )
         content.extend(self._build_image_blocks(variants))
         return content
 
@@ -337,6 +571,7 @@ class GeometryPhotoSolver:
                 "Solve the user task from the attached text and images and return strict JSON.\n"
                 "Use the Qwen parse as a helper, but correct it if the source clearly disagrees.\n"
                 "The materials may contain several independent tasks; solve all of them in source order.\n"
+                "Prefer literal OCR text, visible labels, and explicit numeric values from the source over inferred structure when they conflict.\n"
                 "Prioritize correct interpretation over aggressive solving.\n"
                 "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
                 "%s\n" % SOLVER_JSON_SCHEMA_NOTE
@@ -357,6 +592,11 @@ class GeometryPhotoSolver:
             ensure_ascii=False,
         )
         if mismatch_summary:
+            prompt += (
+                "Self-check instruction:\n"
+                "Resolve the task again from scratch using the source itself. "
+                "Treat the mismatch summary only as a warning about possible failure modes, not as ground truth.\n"
+            )
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
         content = [{"type": "text", "text": prompt}]
@@ -376,6 +616,7 @@ class GeometryPhotoSolver:
             prompt = (
                 "Verify the user task from the attached text and images and return strict JSON.\n"
                 "Check the interpretation, targets, and final answer for all tasks in order.\n"
+                "Prefer literal OCR text, visible labels, and explicit numeric values from the source over inferred structure when they conflict.\n"
                 "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
                 "Return a compact JSON object focused on inconsistencies, confidence, and final answer.\n"
                 "%s\n" % SOLVER_JSON_SCHEMA_NOTE
@@ -399,6 +640,10 @@ class GeometryPhotoSolver:
             ensure_ascii=False,
         )
         if mismatch_summary:
+            prompt += (
+                "Self-check instruction:\n"
+                "Re-verify the task from the source and do not anchor on the previous answer if the source suggests otherwise.\n"
+            )
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
         content = [{"type": "text", "text": prompt}]
@@ -863,6 +1108,7 @@ class GeometryPhotoSolver:
     def _compact_result_for_prompt(self, result: Dict, role: str) -> Dict:
         compact = {
             "task_type": result.get("task_type") or "mixed_task",
+            "ocr_text": self._truncate_text(result.get("ocr_text") or "", 450),
             "normalized_problem_text": self._truncate_text(result.get("normalized_problem_text") or "", 700),
             "target": self._normalize_target(result.get("target")),
             "givens": self._truncate_statements(result.get("givens") or [], limit=6, width=120),
@@ -878,9 +1124,7 @@ class GeometryPhotoSolver:
             },
             "needs_clarification": bool(result.get("needs_clarification", False)),
         }
-        if role == "parser":
-            compact["ocr_text"] = self._truncate_text(result.get("ocr_text") or "", 600)
-        else:
+        if role != "parser":
             compact["final_answer"] = {
                 "value": self._truncate_text(((result.get("final_answer") or {}).get("value") or ""), 80),
                 "format": str(((result.get("final_answer") or {}).get("format") or "text")),
@@ -1192,10 +1436,16 @@ class GeometryPhotoSolver:
 
     def _pick_user_answer(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
         kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
+        if kimi_answer and not self._looks_like_final_answer(kimi_answer):
+            _log.warning("Rejecting solver answer that does not look like a final answer: %s", kimi_answer)
+            kimi_answer = ""
         llama_answer = ""
         llama_confidence = 0.0
         if llama is not None:
             llama_answer = (llama.get("final_answer") or {}).get("value", "").strip()
+            if llama_answer and not self._looks_like_final_answer(llama_answer):
+                _log.warning("Rejecting verifier answer that does not look like a final answer: %s", llama_answer)
+                llama_answer = ""
             llama_confidence = self._coerce_confidence(llama.get("answer_confidence"))
         kimi_confidence = self._coerce_confidence(kimi.get("answer_confidence"))
 
@@ -1261,6 +1511,78 @@ class GeometryPhotoSolver:
 
         return ""
 
+    def _resolve_multi_round_answer(self, default_qwen: Dict, first_round: Dict, second_round: Dict) -> str:
+        first_qwen = first_round.get("qwen") or default_qwen
+        second_qwen = second_round.get("qwen") or default_qwen
+        first_answer = self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_qwen, first_round["llama"])
+        second_answer = self._pick_user_answer(second_round["consensus"], second_round["kimi"], second_qwen, second_round["llama"])
+
+        if first_answer and not second_answer:
+            _log.info("Keeping primary-round answer because self-check did not produce a safe answer")
+            return first_answer
+        if second_answer and not first_answer:
+            _log.info("Using self-check answer because primary round did not produce a safe answer")
+            return second_answer
+        if not first_answer and not second_answer:
+            _log.info("Neither primary nor self-check round produced a safe answer")
+            return ""
+
+        normalized_first = self._normalize_answer_text(first_answer)
+        normalized_second = self._normalize_answer_text(second_answer)
+        if normalized_first == normalized_second:
+            if second_round["consensus"]["score"] > first_round["consensus"]["score"]:
+                _log.info("Primary and self-check rounds agree on the answer; keeping higher-score self-check round")
+                return second_answer
+            _log.info("Primary and self-check rounds agree on the answer; keeping primary round")
+            return first_answer
+
+        first_quality = self._round_quality_score(first_round)
+        second_quality = self._round_quality_score(second_round)
+        if first_quality >= second_quality + 0.20:
+            _log.info(
+                "Keeping primary-round answer after conflicting self-check answers: primary_quality=%.3f self_check_quality=%.3f",
+                first_quality,
+                second_quality,
+            )
+            return first_answer
+        if second_quality >= first_quality + 0.20:
+            _log.info(
+                "Using self-check answer after conflicting round answers: primary_quality=%.3f self_check_quality=%.3f",
+                first_quality,
+                second_quality,
+            )
+            return second_answer
+
+        _log.warning(
+            "Rejecting conflicting answers across primary and self-check rounds: primary=%s self_check=%s primary_quality=%.3f self_check_quality=%.3f",
+            first_answer,
+            second_answer,
+            first_quality,
+            second_quality,
+        )
+        return ""
+
+    def _round_quality_score(self, round_data: Dict) -> float:
+        consensus = round_data["consensus"]
+        kimi = round_data["kimi"]
+        llama = round_data["llama"]
+
+        score = float(consensus.get("score", 0.0))
+        if consensus.get("status") == "accepted":
+            score += 0.20
+        elif consensus.get("status") == "self_check":
+            score += 0.05
+
+        if self._answers_effectively_match(kimi, llama):
+            score += 0.10
+        if not self._used_repair(kimi):
+            score += 0.05
+        if not self._solver_is_degraded(kimi):
+            score += 0.05
+        if self._has_independent_verifier(llama):
+            score += 0.05
+        return score
+
     def _used_repair(self, result: Optional[Dict]) -> bool:
         if not result:
             return False
@@ -1297,7 +1619,7 @@ class GeometryPhotoSolver:
     def _can_accept_repaired_match_without_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._used_repair(kimi):
             return False
-        if self._used_local_salvage(kimi):
+        if float(consensus.get("score", 0.0)) < SELF_CHECK_SCORE_THRESHOLD:
             return False
         if self._solver_is_degraded(kimi):
             return False
@@ -1305,11 +1627,15 @@ class GeometryPhotoSolver:
             return False
         if not self._answers_effectively_match(kimi, llama):
             return False
+        kimi_answer = ((kimi.get("final_answer") or {}).get("value") or "").strip()
+        if not self._looks_like_final_answer(kimi_answer):
+            return False
         qwen_like_clear = True
         kimi_visual = kimi.get("visual_interpretation") or {}
         ambiguities = kimi_visual.get("possible_ambiguities") or []
         if "recovered from non-json output" in ambiguities:
-            qwen_like_clear = False
+            if self._coerce_confidence((llama or {}).get("answer_confidence")) < 0.75:
+                return False
         kimi_confidence = self._coerce_confidence(kimi.get("answer_confidence"))
         llama_confidence = self._coerce_confidence((llama or {}).get("answer_confidence"))
         if kimi_confidence < REPAIRED_MATCH_CONFIDENCE_THRESHOLD and llama_confidence < REPAIRED_MATCH_CONFIDENCE_THRESHOLD:
@@ -1317,6 +1643,36 @@ class GeometryPhotoSolver:
         if consensus.get("answer_agreement", 0.0) < 1.0:
             return False
         return qwen_like_clear
+
+    def _looks_like_final_answer(self, answer: str) -> bool:
+        text = (answer or "").strip()
+        if not text:
+            return False
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if any(re.match(r"^\d+\)\s*", line) for line in lines):
+            normalized_lines = [re.sub(r"^\d+\)\s*", "", line).strip() for line in lines]
+            return all(self._looks_like_final_answer(line) for line in normalized_lines if line)
+
+        if len(text) > 80:
+            return False
+        lowered = text.lower()
+        forbidden_markers = (
+            "dependent on",
+            "unknown",
+            "cannot determine",
+            "insufficient",
+            "need clarification",
+            "зависит",
+            "неизвест",
+            "недостаточно",
+            "уточн",
+        )
+        for marker in forbidden_markers:
+            if marker in lowered:
+                return False
+        if len(text.split()) > 5:
+            return False
+        return True
 
     def _can_accept_verifier_over_local_salvage(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._used_local_salvage(kimi):

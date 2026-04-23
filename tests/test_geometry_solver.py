@@ -228,6 +228,16 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
         self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
 
+    def test_local_salvage_match_with_independent_verifier_is_accepted(self):
+        kimi = self._make_result(answer="0.8", answer_confidence=0.70, used_repair=True)
+        kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
+        llama = self._make_result(answer="0.8", answer_confidence=0.84)
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+
+        consensus = self.solver._compare_results(kimi, qwen, llama)
+
+        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "0.8")
+
     def test_verifier_can_override_local_salvage_mismatch(self):
         kimi = self._make_result(answer="8", answer_confidence=0.7, used_repair=True)
         kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
@@ -257,6 +267,75 @@ class GeometrySolverConsensusTests(unittest.TestCase):
 
         self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "")
 
+    def test_non_final_explanatory_phrase_is_rejected(self):
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        kimi = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9, used_repair=True)
+        llama = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9)
+
+        consensus = self.solver._compare_results(kimi, qwen, llama)
+
+        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "")
+
+    def test_multi_round_selection_keeps_primary_when_self_check_fails(self):
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_kimi = self._make_result(answer="80", answer_confidence=0.93)
+        primary_llama = self._make_result(answer="80", answer_confidence=0.92)
+        self_check_kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
+        self_check_llama = self._make_result(answer="", answer_confidence=0.0)
+
+        first_round = {
+            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
+            "kimi": primary_kimi,
+            "llama": primary_llama,
+        }
+        second_round = {
+            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
+            "kimi": self_check_kimi,
+            "llama": self_check_llama,
+        }
+
+        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "80")
+
+    def test_multi_round_selection_uses_self_check_when_primary_has_no_safe_answer(self):
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
+        primary_llama = self._make_result(answer="", answer_confidence=0.0)
+        self_check_kimi = self._make_result(answer="69", answer_confidence=0.91)
+        self_check_llama = self._make_result(answer="69", answer_confidence=0.90)
+
+        first_round = {
+            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
+            "kimi": primary_kimi,
+            "llama": primary_llama,
+        }
+        second_round = {
+            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
+            "kimi": self_check_kimi,
+            "llama": self_check_llama,
+        }
+
+        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "69")
+
+    def test_multi_round_selection_rejects_close_conflicting_answers(self):
+        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_kimi = self._make_result(answer="12", answer_confidence=0.91)
+        primary_llama = self._make_result(answer="12", answer_confidence=0.90)
+        self_check_kimi = self._make_result(answer="6", answer_confidence=0.92)
+        self_check_llama = self._make_result(answer="6", answer_confidence=0.91)
+
+        first_round = {
+            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
+            "kimi": primary_kimi,
+            "llama": primary_llama,
+        }
+        second_round = {
+            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
+            "kimi": self_check_kimi,
+            "llama": self_check_llama,
+        }
+
+        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "")
+
     def test_compact_result_for_prompt_truncates_large_payloads(self):
         result = self._make_result(answer="80", answer_confidence=0.91)
         result["normalized_problem_text"] = "x" * 2000
@@ -276,6 +355,21 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertLessEqual(len(compact["givens"]), 6)
         self.assertLessEqual(len(compact["diagram_relations"]), 6)
         self.assertLessEqual(len(compact["visual_interpretation"]["possible_ambiguities"]), 4)
+
+    def test_exact_answer_engine_solves_regression_texts(self):
+        cases = [
+            ("Известно, что в треугольнике ABC стороны AB и BC равны. Внешний угол при вершине B равен 138°. Найдите угол C.", "69"),
+            ("В ромбе ABCD диагонали пересекаются в точке O. Окружность радиусом 4 вписана в ромб и касается стороны AD в точке E. Найдите площадь ромба, если известно, что DE = 2.", "80"),
+            ("В правильной четырёхугольной пирамиде SABCD сторона основания AB равна 18, а боковое ребро AS равно 15. Найдите синус угла между прямыми AB и SD.", "0.8"),
+            ("В прямоугольном параллелепипеде ABCDA1B1C1D1 точка K — середина ребра B1C1. Известно, что AD = 4√11, AA1 = 3√22. Найдите расстояние от точки A1 до плоскости CDK.", "6"),
+            ("Из коробки, в которой лежат 15 чёрных и 5 красных маркеров, достают один случайный маркер. Найдите вероятность того, что он окажется красным.", "0.25"),
+            ("Каждый из 25 учащихся в классе посещает хотя бы один из двух кружков. Известно, что 10 человек занимаются в химическом кружке, а 18 — в биологическом. Сколько учащихся посещают оба кружка?", "3"),
+            ("В некотором случайном эксперименте рассматривается случайная величина X. Известно, что P(X ≤ 15) = 0,77 и P(X ≥ 10) = 0,58. Найдите вероятность события (10 ≤ X ≤ 15).", "0.35"),
+            ("На полке стоят 6 красных чашек и 6 красных блюдец, 4 синих чашки и 4 синих блюдца. Случайным образом выбирают одно блюдце и одну чашку. Какова вероятность того, что они окажутся одного цвета?", "0.52"),
+        ]
+
+        for text, expected in cases:
+            self.assertEqual(self.solver._try_exact_answer_engine(text), expected)
 
     def test_loose_terminal_answer_salvage_extracts_simple_rhs(self):
         raw = (
