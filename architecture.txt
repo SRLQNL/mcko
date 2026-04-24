@@ -1,241 +1,229 @@
 ================================================================================
-  MCKO — АРХИТЕКТУРА СИСТЕМЫ
+  MCKO - CURRENT ARCHITECTURE
 ================================================================================
 
-ОБЗОР
------
-Приложение построено на Python как единый фоновый процесс с GUI на tkinter.
-Работает без видимых окон при старте. Окно чата создаётся по требованию и
-скрывается, а не уничтожается, чтобы сохранить историю сессии.
+OVERVIEW
+--------
+MCKO is a small Python X11/Tkinter desktop app. It starts hidden, listens for
+global hotkeys, accepts text/images/screenshots, sends tasks to OpenRouter, and
+returns answer-only text.
+
+The active solver runtime is `app/geometry_solver.py`.
+
+Active model roles:
+  Qwen2.5-VL-72B-Instruct  parser / OCR / visual extraction / option arbiter
+  Kimi K2.6                primary solver
+  Llama 4 Maverick         verifier / JSON repair model
+
+The old single-model `APIClient` path is not active and `app/api_client.py` is
+not part of the current runtime.
 
 
-СТРУКТУРА ФАЙЛОВ
-----------------
+FILE STRUCTURE
+--------------
 
 mcko/
-├── run.sh                  # Точка входа: установка зависимостей + запуск
-├── main.py                 # Инициализация, watchdog, запуск компонентов
-├── .env                    # Конфигурация (не в репозитории)
-├── .env.example            # Шаблон конфигурации
-├── mcko.log                # Файл логов (создаётся автоматически)
-│
+├── run.sh                       startup + offline dependency install
+├── watchdog.sh                  restarts main.py if it exits
+├── kill.sh                      stops watchdog/app processes
+├── main.py                      entrypoint, Tk root, hotkey callbacks
+├── .env                         local config, may contain base64 API key
+├── .env.example                 sanitized config template
+├── AGENTS.md                    Codex context
+├── CLAUDE.md                    Claude Code handoff context
+├── architecture.txt             this file
+├── startup.txt                  user startup notes
+├── tasks.txt                    historical/current checklist
+├── tests/
+│   ├── test_geometry_solver.py
+│   └── run_solver_fixture_suite.py
 ├── app/
-│   ├── __init__.py
-│   ├── config.py           # Загрузка и валидация .env
-│   ├── hotkeys.py          # Глобальные хоткеи (pynput)
-│   ├── clipboard.py        # Работа с буфером обмена (текст + изображения)
-│   ├── api_client.py       # OpenRouter API клиент
-│   ├── session.py          # История диалога текущей сессии
-│   └── logger.py           # Настройка логирования
-│
+│   ├── config.py                .env loading and base64 key decoding
+│   ├── geometry_solver.py       active three-model solver
+│   ├── scenario2.py             background clipboard flow
+│   ├── hotkeys.py               global X11 hotkeys
+│   ├── clipboard.py             clipboard text/image helpers
+│   ├── screenshot.py            screenshot capture
+│   ├── session.py               in-memory chat history
+│   ├── logger.py                logging setup
+│   └── restart.py               restart helpers if used by scripts
 └── ui/
-    ├── __init__.py
-    ├── window.py           # Главное окно чата (tkinter)
-    ├── input_field.py      # Многострочное поле ввода с поддержкой меток
-    ├── chat_view.py        # Область отображения истории чата
-    └── image_token.py      # Атомарный объект-метка для изображений
+    ├── window.py                small chat window
+    ├── input_field.py           text input and image labels
+    ├── chat_view.py             chat transcript / assistant placeholder
+    └── image_token.py           image-label support
 
 
-КОМПОНЕНТЫ И ВЗАИМОДЕЙСТВИЕ
-----------------------------
+RUNTIME DATA FLOW
+-----------------
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                          main.py                                    │
-│  ┌──────────────┐    ┌─────────────────┐    ┌───────────────────┐  │
-│  │  Watchdog    │    │  HotkeyManager  │    │  tkinter mainloop │  │
-│  │  (thread)    │    │  (pynput, thread)│    │  (main thread)    │  │
-│  └──────┬───────┘    └────────┬────────┘    └────────┬──────────┘  │
-│         │                     │                       │             │
-│         │ перезапуск          │ события               │             │
-│         ▼                     ▼                       ▼             │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                    App Controller                             │  │
-│  │  - связывает все компоненты                                   │  │
-│  │  - маршрутизирует события хоткеев                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+GUI path:
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                       СЦЕНАРИЙ 1 — ОКНО ЧАТА                        │
-│                                                                      │
-│  Ctrl+Space                                                          │
-│      │                                                               │
-│      ▼                                                               │
-│  ChatWindow.toggle()                                                 │
-│      │                                                               │
-│      ▼                                                               │
-│  InputField ──(Enter)──► Session.add_user()                         │
-│      │                        │                                      │
-│      │                        ▼                                      │
-│      │               solve_content_blocks()                          │
-│      │                        │                                      │
-│      │                        ├─► text-only: Kimi                   │
-│      │                        └─► image/image+text:                 │
-│      │                             Qwen → Kimi → Llama              │
-│      │                                                               │
-│      ▼                                                               │
-│  ChatView.append_assistant_chunk()                                   │
-└──────────────────────────────────────────────────────────────────────┘
+  InputField content blocks
+      -> main.on_send()
+      -> Session.add_user()
+      -> GeometryPhotoSolver.solve_content_blocks()
+      -> ChatView answer-only output
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                    СЦЕНАРИЙ 2 — ФОНОВЫЙ ЗАПРОС                      │
-│                                                                      │
-│  Ctrl+Alt+Space                                                      │
-│      │                                                               │
-│      ▼                                                               │
-│  Clipboard.read() ──► текст или изображение (PIL → base64)           │
-│      │                                                               │
-│      ▼                                                               │
-│  GeometryPhotoSolver.solve_content_blocks()                          │
-│      │                                                               │
-│      ├─► Qwen  (parser / OCR)                                        │
-│      ├─► Kimi  (primary solver)                                      │
-│      └─► Llama (verifier)                                            │
-│      │                                                               │
-│      ▼                                                               │
-│  Clipboard.write(answer_only_text)                                   │
-│  (окно не открывается, уведомление опционально)                     │
-└──────────────────────────────────────────────────────────────────────┘
+Clipboard path:
+
+  Ctrl+Alt+Space
+      -> app.scenario2.handle_clipboard_hotkey()
+      -> app.clipboard detects text/image
+      -> GeometryPhotoSolver.solve_content_blocks()
+      -> clipboard.write_text(answer)
+
+Screenshot path:
+
+  Ctrl+Shift+S
+      -> app.screenshot.take_screenshot()
+      -> ChatWindow.insert_image_bytes()
+      -> InputField image label
+      -> user sends normally
 
 
-МОДУЛЬ: InputField (ui/input_field.py)
---------------------------------------
-Наследует tk.Text. Управляет атомарными метками изображений.
+SOLVER PIPELINE
+---------------
 
-Внутреннее состояние:
-  _images: dict[str, bytes]  # "pic1" → raw PNG/JPEG bytes
+`GeometryPhotoSolver.solve_content_blocks()`:
 
-Метка [added picN]:
-  - Вставляется как tk.Text tag с уникальным именем
-  - Тег настроен на захват событий клавиш: любой KeyPress на символ
-    внутри тега удаляет весь диапазон тега и соответствующий ключ из _images
-  - При сборке сообщения для API метки заменяются на реальные данные
-    изображения в формате base64
+  1. Extracts text and image blocks.
+  2. Text-only requests use `_solve_text_only()` through Kimi.
+  3. Image/image+text requests:
+     - `_prepare_variants()` decodes image data URLs and may create crops.
+     - `_call_qwen()` parses/OCRs the source.
+     - `_call_kimi()` solves from source images plus compact Qwen parse.
+     - `_call_llama()` verifies Kimi output.
+     - `_compare_results()` scores consistency.
+     - `_should_run_qwen_solver_challenge()` may run Qwen as an option arbiter
+       for detected "write selected option numbers" tasks.
+     - `_should_run_self_check()` may trigger a second Qwen/Kimi/Llama round.
+     - `_pick_user_answer()` chooses the final answer.
+  4. Recoverable provider failures return degraded fallbacks.
+  5. Unexpected top-level errors return `1) Не удалось определить ответ`.
 
-Сборка сообщения (get_message()):
-  1. Обходим содержимое поля сегмент за сегментом
-  2. Текстовые сегменты → content type "text"
-  3. Теги изображений → content type "image_url" с base64 data URL
-  4. Возвращаем список content-блоков для OpenRouter API
+OpenRouter endpoint:
 
+  https://openrouter.ai/api/v1/chat/completions
 
-МОДУЛЬ: GeometryPhotoSolver (app/geometry_solver.py)
-----------------------------------------------------
-  endpoint: https://openrouter.ai/api/v1/chat/completions
-  auth:     Bearer OPENROUTER_API_KEY
-  format:   OpenAI-compatible JSON
+Request style:
 
-  Конвейер solve_content_blocks():
-    - извлекает text/image content blocks
-    - если вход text-only: решает через быстрый путь Kimi
-    - если есть изображение: строит full/text_crop/diagram_crop варианты
-    - для image/image+text отправляет задачу в Qwen → Kimi → Llama
-    - при недоступности parser/verifier уходит в degraded fallback
-    - сериализует solve-пайплайн для большей стабильности
-    - при необходимости делает self-check round
-    - наружу возвращает только answer-only строку вида "1) 69"
+  stream: false
+  temperature: 0
+  response_format: {"type": "json_object"}
 
 
-МОДУЛЬ: Session (app/session.py)
----------------------------------
-  Хранит историю текущей сессии в памяти:
-    messages: list[dict]  # {role, content}
+JSON AND REPAIR
+---------------
 
-  История передаётся в каждый запрос к API (Сценарий 1).
-  Сценарий 2 — отдельный одноразовый запрос без истории.
-  При закрытии приложения история не сохраняется (in-memory only).
+Models are requested to return strict JSON, but live providers can return prose,
+empty content, malformed JSON, or unexpected shapes.
 
+Current handling:
 
-МОДУЛЬ: HotkeyManager (app/hotkeys.py)
-----------------------------------------
-  Использует pynput.keyboard.GlobalHotKeys.
-  Регистрирует хоткеи из .env:
-    HOTKEY_WINDOW    → toggle ChatWindow (через root.after для thread safety)
-    HOTKEY_CLIPBOARD → запустить Scenario2Handler в отдельном потоке
-
-  Все взаимодействия с tkinter выполняются через root.after() —
-  прямые вызовы из потока pynput небезопасны.
+  - `_request_json()` wraps recoverable HTTP/network/parse failures.
+  - `_extract_json_object()` extracts JSON from wrapped or noisy text.
+  - Kimi malformed output is repaired through Llama where possible.
+  - Local answer salvage is used only when it looks safe.
+  - Option-style prose is repaired remotely before local salvage because
+    numbered explanations can be mistaken for final answers.
+  - `_normalize_result()` tolerates dict/list/str/scalar variants in repaired
+    payloads.
 
 
-ФОНОВЫЙ РЕЖИМ И WATCHDOG
---------------------------
+ANSWER SELECTION
+----------------
 
-run.sh:
-  1. Проверяет наличие python3, pip
-  2. Устанавливает зависимости из requirements.txt (если не установлены)
-  3. Запускает: python3 main.py >> mcko.log 2>&1 &
+The selector prefers answer-only correctness over exposing uncertainty text.
+It considers:
 
-main.py:
-  - Создаёт tk.Tk() с withdraw() — окно скрыто с самого старта
-  - Устанавливает wm_overrideredirect(True) чтобы убрать из панели задач
-  - Запускает watchdog-поток
+  - parser ambiguity
+  - provider fallback state
+  - solver repair state
+  - independent verifier availability
+  - answer agreement
+  - answer confidence
+  - whether the candidate looks like a final answer
 
-Watchdog (поток-демон):
-  - Контролирует основной поток через событие-флаг
-  - Если основной процесс завершился аварийно — перезапускает через subprocess
-  - Между попытками перезапуска — пауза 3 секунды
-  - Логирует каждый перезапуск в mcko.log
+For multiple-choice option-selection tasks, Qwen can be used as a focused
+option arbiter only when the parser identifies the task format and model answers
+disagree.
 
-
-ЗАВИСИМОСТИ (requirements.txt)
---------------------------------
-  requests          # HTTP-клиент для OpenRouter API
-  pynput            # Глобальные хоткеи
-  Pillow            # Работа с изображениями из буфера обмена
-  python-dotenv     # Загрузка .env
-
-  Стандартная библиотека Python:
-    tkinter         # GUI (входит в Python)
-    threading       # Фоновые потоки
-    base64          # Кодирование изображений
-    logging         # Логирование
-    subprocess      # Перезапуск через watchdog
-    io              # BytesIO для изображений
+No hardcoded task-answer exact engine should be active.
 
 
-УСТАНОВКА НА ЧИСТУЮ ROSАOS
------------------------------
+UI AND THREADING
+----------------
 
-run.sh выполняет:
-  1. which python3 || (sudo apt-get install -y python3 python3-pip)
-  2. pip3 install -r requirements.txt --quiet
-  3. cp .env.example .env (если .env не существует)
-  4. python3 main.py >> mcko.log 2>&1 &
-  5. echo "MCKO запущен (PID: $!)"
+Tkinter must run on the main thread. Hotkey callbacks dispatch work through
+`root.after()` where they touch UI.
 
-Пользователь должен вручную заполнить .env после первого запуска,
-если он был создан из шаблона.
+Important UI constraints:
 
-
-ПОТОК ДАННЫХ: ИЗОБРАЖЕНИЕ В ЗАПРОСЕ
---------------------------------------
-
-Сценарий 1:
-  Clipboard → PIL.Image → BytesIO → base64 encode
-  → сохранить в InputField._images["picN"]
-  → при отправке: собрать content-блок {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
-  → передать в GeometryPhotoSolver.solve_content_blocks() вместе с текстом
-
-Сценарий 2:
-  Clipboard → PIL.ImageGrab.grabclipboard()
-  → если Image: конвертировать в base64 PNG
-  → если str: передать как текст
-  → GeometryPhotoSolver.solve_content_blocks() → answer-only текст → Clipboard.write(text)
+  - app starts hidden
+  - chat window is small
+  - close button hides, not destroys
+  - `overrideredirect(True)` behavior is intentional
+  - pasted images become `[added picN]` labels
+  - screenshot insertion should not show the window unexpectedly
+  - input is re-enabled after response worker completion
 
 
-ЛОГИРОВАНИЕ
+CONFIGURATION
+-------------
+
+Required:
+
+  OPENROUTER_API_KEY
+
+Model variables:
+
+  PHOTO_SOLVER_KIMI_MODEL
+  PHOTO_SOLVER_QWEN_MODEL
+  PHOTO_SOLVER_LLAMA_MODEL
+
+Hotkeys:
+
+  HOTKEY_WINDOW
+  HOTKEY_SHOW
+  HOTKEY_CLIPBOARD
+  HOTKEY_SCREENSHOT
+
+`OPENROUTER_API_KEY` can be stored raw or base64-encoded. `app/config.py`
+decodes base64 values that do not start with `sk-`.
+
+Legacy variables are not active:
+
+  OPENROUTER_MODEL
+  OPENROUTER_MODELS
+  SYSTEM_PROMPT_1
+  SYSTEM_PROMPT_2
+
+
+TESTING
+-------
+
+Local:
+
+  python3 -m py_compile main.py app/*.py ui/*.py tests/*.py
+  python3 -m unittest discover -s tests -p 'test_*.py'
+
+Live model suite:
+
+  python3 tests/run_solver_fixture_suite.py user-regression
+
+The live suite requires network and OpenRouter quota. It is model-real and
+image-only, but it is not a full GUI/X11 test.
+
+
+KNOWN RISKS
 -----------
-  Файл: mcko.log (рядом с main.py)
-  Уровень: INFO (ошибки — ERROR)
-  Формат: %(asctime)s [%(levelname)s] %(name)s: %(message)s
-  Ротация: нет (для простоты; при необходимости — RotatingFileHandler)
 
-  Логируются:
-    - Запуск и остановка приложения
-    - Каждый запрос к API (модель, кол-во токенов в запросе)
-    - Ошибки API (статус-код, тело ответа)
-    - Перезапуски watchdog
-    - Ошибки хоткеев
-
+  - Qwen upstream `429` can degrade image parse quality.
+  - Kimi can return prose or malformed JSON.
+  - Llama can confidently verify a wrong answer.
+  - Option-selection geometry is the most unstable observed format.
+  - The GUI needs target-machine X11 testing; local unit tests do not cover all
+    focus/hotkey behavior.
 
 ================================================================================

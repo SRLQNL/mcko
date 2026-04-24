@@ -1,158 +1,112 @@
 ================================================================================
-  MCKO — ПЛАН РАЗРАБОТКИ (подзадачи)
+  MCKO - CURRENT ENGINEERING CHECKLIST
 ================================================================================
 
-ГРУППА 1: Скелет проекта
--------------------------
-[x] 1.1  Создать структуру директорий: app/, ui/
-[x] 1.2  Создать пустые __init__.py во всех пакетах
-[x] 1.3  Создать .env.example со всеми переменными и комментариями
-[x] 1.4  Создать requirements.txt (requests, pynput, Pillow, python-dotenv)
-[x] 1.5  Создать main.py — точка входа, только import + заглушка запуска
+CURRENT BASELINE
+----------------
+
+[x] App runs through `main.py`.
+[x] Active runtime is `GeometryPhotoSolver`.
+[x] Three-model image path is restored:
+    Qwen parser -> Kimi solver -> Llama verifier.
+[x] Text-only fast path uses Kimi.
+[x] Old active `APIClient` runtime is removed.
+[x] User-facing output is answer-only.
+[x] Solver has top-level fallback to `1) Не удалось определить ответ`.
+[x] JSON repair and payload normalization are covered by unit tests.
+[x] User regression fixture runner exists.
+[x] `AGENTS.md` and `CLAUDE.md` document current architecture.
 
 
-ГРУППА 2: Конфигурация и логирование
---------------------------------------
-[x] 2.1  app/logger.py — настроить logging: формат, уровень, FileHandler → mcko.log
-[x] 2.2  app/config.py — загрузка .env через python-dotenv, валидация обязательных полей
-[x] 2.3  Проверка: запустить main.py, убедиться что mcko.log создаётся и пишутся сообщения
+DO NOT REINTRODUCE
+------------------
+
+[ ] Hardcoded answers for user screenshots.
+[ ] Broad exact-solver hacks for specific task classes.
+[ ] Active `OPENROUTER_MODEL` / `OPENROUTER_MODELS`.
+[ ] Active `SYSTEM_PROMPT_1` / `SYSTEM_PROMPT_2`.
+[ ] Single-model runtime unless explicitly requested again.
+[ ] Reasoning/explanations in final UI or clipboard output.
 
 
-ГРУППА 3: OpenRouter API клиент
----------------------------------
-[x] 3.1  app/api_client.py — класс APIClient, метод send() без стриминга
-[x] 3.2  Добавить поддержку stream=True (SSE-поток, генератор строк)
-[x] 3.3  Добавить поддержку мультимодального контента (content-блоки text + image_url)
-[x] 3.4  Логировать каждый запрос: модель, кол-во сообщений, наличие изображений
-[x] 3.5  Логировать ошибки: HTTP-статус, тело ответа
-[x] 3.6  Проверка: отправить тестовый запрос вручную через python -c
+CORE RUNTIME TODO
+-----------------
+
+[ ] Re-run full live suite on target machine:
+    `python3 tests/run_solver_fixture_suite.py user-regression`
+
+[ ] Investigate any remaining false answers in live logs:
+    - compare Qwen parse
+    - compare Kimi answer
+    - compare Llama verifier
+    - check repair source
+    - check final selector branch
+
+[ ] Improve provider resilience:
+    - better handling for Qwen `429`
+    - longer/backoff retry for parser on image path
+    - possibly alternate parser model if Qwen is rate-limited
+
+[ ] Improve option-selection task stability:
+    - validate option arbiter output shape
+    - avoid accepting explanations as option digits
+    - keep the arbiter generic, not task-specific
+
+[ ] Keep JSON failure handling strict:
+    - malformed Kimi JSON must not crash worker
+    - malformed Qwen/Llama JSON should degrade
+    - local salvage must not override stronger structured evidence
 
 
-ГРУППА 4: История сессии
---------------------------
-[x] 4.1  app/session.py — класс Session, хранение messages: list[dict] в памяти
-[x] 4.2  Методы: add_user(), add_assistant(), get_history(), clear()
-[x] 4.3  Логировать добавление сообщений (роль, длина контента)
+GUI / X11 TODO
+--------------
+
+[ ] Manual target-machine startup test with `bash run.sh`.
+[ ] Ctrl+Space toggles small window.
+[ ] Ctrl+Shift+Space shows window.
+[ ] Ctrl+Alt+Space processes clipboard text.
+[ ] Ctrl+Alt+Space processes clipboard image.
+[ ] Ctrl+Shift+S inserts screenshot without unwanted first-window popup.
+[ ] Close via `×` hides the window and preserves session.
+[ ] Pasting multiple images preserves order.
+[ ] Input re-enables after provider errors/timeouts.
+[ ] Assistant placeholder `...` clears when answer starts.
 
 
-ГРУППА 5: Буфер обмена
-------------------------
-[x] 5.1  app/clipboard.py — read_text(): получить текст из буфера
-[x] 5.2  app/clipboard.py — read_image(): PIL.ImageGrab.grabclipboard() → bytes (PNG)
-[x] 5.3  app/clipboard.py — write_text(): записать текст в буфер
-[x] 5.4  app/clipboard.py — detect_type(): вернуть 'text' | 'image' | 'empty'
-[x] 5.5  Логировать тип и размер содержимого буфера при каждом чтении
-[x] 5.6  Проверка: скопировать текст/картинку, запустить тест вручную
+TEST COMMANDS
+-------------
+
+Local:
+
+  python3 -m py_compile main.py app/*.py ui/*.py tests/*.py
+  python3 -m unittest discover -s tests -p 'test_*.py'
+
+Live:
+
+  python3 tests/run_solver_fixture_suite.py user-regression
+
+Known live-suite expected answers:
+
+  101 -> 16
+  102 -> 25
+  103 -> 23
+  104 -> 124
+  105 -> 120/17
+  106 -> a/sqrt(3) or equivalent
+  107 -> 69
+  108 -> 80
+  109 -> 0.8
+  110 -> 6
 
 
-ГРУППА 6: Глобальные хоткеи
-------------------------------
-[x] 6.1  app/hotkeys.py — класс HotkeyManager на базе pynput.keyboard.GlobalHotKeys
-[x] 6.2  Регистрация хоткея HOTKEY_WINDOW → callback (через root.after)
-[x] 6.3  Регистрация хоткея HOTKEY_CLIPBOARD → callback (в отдельном потоке)
-[x] 6.4  Метод start() запускает listener в daemon-потоке
-[x] 6.5  Метод stop() корректно останавливает listener
-[x] 6.6  Логировать регистрацию каждого хоткея и каждое его срабатывание
-[ ] 6.7  Проверка: убедиться что хоткеи срабатывают из фона
+RELEASE TODO
+------------
 
+[ ] Before release, sanitize `.env` in the archive:
+    `OPENROUTER_API_KEY=`
 
-ГРУППА 7: Сценарий 2 — фоновый запрос
-----------------------------------------
-[x] 7.1  Написать функцию handle_clipboard_hotkey():
-         - читает буфер (текст или изображение)
-         - формирует одноразовый запрос с SYSTEM_PROMPT_2
-         - вызывает APIClient.send(stream=False)
-         - записывает ответ в буфер
-[x] 7.2  Логировать: тип входных данных, успех/ошибку, длину ответа
-[ ] 7.3  Проверка: скопировать текст, нажать хоткей, вставить — должен быть ответ ИИ
-[ ] 7.4  Проверка: скопировать изображение, нажать хоткей, проверить буфер
+[ ] Release archive should match `main` code except for the empty key.
 
-
-ГРУППА 8: UI — базовое окно
------------------------------
-[x] 8.1  ui/window.py — создать tk.Toplevel (не Tk), скрытое по умолчанию
-[x] 8.2  Метод toggle(): show/hide окно (withdraw / deiconify)
-[x] 8.3  Убрать окно из панели задач: wm_overrideredirect(True) + type hint '_NET_WM_WINDOW_TYPE'
-[x] 8.4  Разместить базовый layout: верхняя зона (чат) + нижняя зона (ввод)
-[x] 8.5  Закрытие по Escape — скрывать, не уничтожать
-[x] 8.6  Логировать показ и скрытие окна
-
-
-ГРУППА 9: UI — область чата
------------------------------
-[x] 9.1  ui/chat_view.py — tk.Text в режиме read-only для отображения истории
-[x] 9.2  Разные теги для сообщений пользователя и ИИ (цвет, отступ)
-[x] 9.3  Метод append_user(text): добавить сообщение пользователя
-[x] 9.4  Метод append_assistant_chunk(text): добавить/дополнить сообщение ИИ (стриминг)
-[x] 9.5  Автоскролл вниз при добавлении нового контента
-[x] 9.6  Метод clear(): очистить область чата
-
-
-ГРУППА 10: UI — поле ввода с метками изображений
---------------------------------------------------
-[x] 10.1 ui/input_field.py — наследник tk.Text
-[x] 10.2 Перехват Enter → отправка, Shift+Enter → перенос строки
-[x] 10.3 Перехват Ctrl+V:
-         - если буфер содержит изображение → вставить метку [added picN]
-         - если буфер содержит текст → стандартная вставка
-[x] 10.4 Реализовать атомарность метки:
-         - тег с захватом KeyPress/Delete/BackSpace
-         - любое нажатие на символ метки → удалить весь тег + данные из _images
-[x] 10.5 Метод get_content() → list[dict] content-блоков для API (текст + base64-изображения)
-[x] 10.6 Метод clear(): очистить поле и _images
-[x] 10.7 Убедиться что Ctrl+C, Ctrl+X, Ctrl+Z работают штатно
-[x] 10.8 Логировать вставку изображения (имя метки, размер в байтах)
-
-
-ГРУППА 11: Сценарий 1 — интеграция чата
------------------------------------------
-[x] 11.1 Соединить InputField → Session → APIClient → ChatView
-[ ] 11.2 При отправке: заблокировать поле ввода, показать индикатор ожидания
-[x] 11.3 Реализовать стриминг ответа в ChatView (chunk by chunk)
-[ ] 11.4 После получения ответа: разблокировать поле, сфокусировать
-[x] 11.5 Логировать начало и конец каждого запроса, кол-во символов в ответе
-[ ] 11.6 Проверка: полный цикл диалога с несколькими сообщениями подряд
-[ ] 11.7 Проверка: отправка текста + изображения вместе
-
-
-ГРУППА 12: main.py — сборка и фоновый режим
----------------------------------------------
-[x] 12.1 Инициализировать tk.Tk(), сразу вызвать withdraw()
-[x] 12.2 Создать все компоненты: Config, Logger, Session, APIClient, Clipboard, HotkeyManager, ChatWindow
-[x] 12.3 Передать callback'и в HotkeyManager
-[x] 12.4 Вызвать root.mainloop()
-[x] 12.5 Логировать успешный старт всех компонентов
-
-
-ГРУППА 13: Watchdog и автоперезапуск
---------------------------------------
-[x] 13.1 Написать watchdog.sh (или watchdog в run.sh): цикл while true; do python3 main.py; sleep 3; done
-[x] 13.2 Логировать каждый перезапуск с timestamp в mcko.log
-[ ] 13.3 Альтернатива: watchdog-поток внутри main.py через subprocess + флаг
-[ ] 13.4 Проверка: принудительно убить процесс, убедиться в перезапуске
-
-
-ГРУППА 14: run.sh — установка и запуск
-----------------------------------------
-[x] 14.1 Проверить наличие python3, установить если нет (apt-get)
-[x] 14.2 Проверить наличие pip3, установить если нет
-[x] 14.3 Установить зависимости: pip3 install -r requirements.txt
-[x] 14.4 Скопировать .env.example → .env если .env не существует
-[x] 14.5 Запустить через watchdog в фоне: nohup bash watchdog.sh >> mcko.log 2>&1 &
-[x] 14.6 Вывести PID и подсказку о заполнении .env
-[ ] 14.7 Проверка: git clone + bash run.sh на чистой системе
-
-
-ГРУППА 15: Финальное тестирование
------------------------------------
-[ ] 15.1 Сценарий 1: открыть окно хоткеем, написать текст, получить ответ
-[ ] 15.2 Сценарий 1: вставить изображение, убедиться в метке, отправить, получить ответ
-[ ] 15.3 Сценарий 1: несколько сообщений подряд — история сохраняется
-[ ] 15.4 Сценарий 2: скопировать текст → хоткей → вставить → проверить ответ
-[ ] 15.5 Сценарий 2: скопировать изображение → хоткей → проверить буфер
-[ ] 15.6 Фоновый режим: убедиться что нет окна в панели задач
-[ ] 15.7 Watchdog: убить процесс → убедиться в перезапуске через 3 сек
-[ ] 15.8 Проверить mcko.log — все ключевые события залогированы
-[ ] 15.9 Установка с нуля: bash run.sh на чистой RosaOS
+[ ] Do not include local-only logs or generated `/tmp` fixtures.
 
 ================================================================================

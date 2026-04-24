@@ -1,166 +1,184 @@
 ================================================================================
-  MCKO — Инструкция по запуску и использованию
+  MCKO - STARTUP AND USAGE
 ================================================================================
 
+QUICK START
+-----------
 
-БЫСТРЫЙ СТАРТ
--------------
-
-1. Клонировать репозиторий и перейти в папку:
+1. Clone and enter the repository:
 
      git clone <url> mcko
      cd mcko
 
-2. Запустить скрипт установки:
+2. Start installation/run script:
 
      bash run.sh
 
-   При первом запуске скрипт:
-   - установит python3 и pip3 (если отсутствуют)
-   - установит xclip (на Linux)
-   - установит Python-зависимости из requirements.txt
-   - создаст файл .env из шаблона и остановится с просьбой заполнить его
+   The script installs dependencies from local `packages/`, creates `.env` from
+   `.env.example` if needed, and starts the app through `watchdog.sh`.
 
-3. Открыть .env в любом текстовом редакторе и указать API-ключ:
+3. Fill `.env` if it was created from the template:
 
-     OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxxxxxxxxxxxxx
+     OPENROUTER_API_KEY=<base64-or-raw-openrouter-key>
 
-   Остальные параметры можно оставить по умолчанию.
+4. Restart:
 
-4. Запустить повторно:
-
+     bash kill.sh
      bash run.sh
 
-   Приложение запустится в фоне. Никакого окна не появится — это нормально.
+The app starts hidden. That is expected.
 
 
-ОСТАНОВКА
----------
+STOPPING
+--------
 
-Приложение работает через watchdog-процесс. Чтобы полностью остановить:
+Use:
 
-     kill <PID>
+     bash kill.sh
 
-  PID выводится в терминале при запуске run.sh.
-  Также можно найти процесс вручную:
-
-     pgrep -f watchdog.sh
+or manually stop watchdog/main processes if needed.
 
 
-ХОТКЕИ
-------
+HOTKEYS
+-------
 
-  Глобальные (работают в любом приложении):
+Global hotkeys:
 
-    Ctrl + Space          — переключить окно чата (показать / скрыть)
-    Ctrl + Shift + Space  — показать окно чата (только открыть, не закрывать)
-    Ctrl + Alt + Space    — обработать содержимое буфера обмена (фоновый режим)
+  Ctrl + Space          toggle chat window
+  Ctrl + Shift + Space  show chat window
+  Ctrl + Alt + Space    solve current clipboard content in background
+  Ctrl + Shift + S      take screenshot and insert it into the input field
 
-  В окне чата:
+Chat window:
 
-    Enter               — отправить сообщение
-    Shift + Enter       — перенос строки (новая строка без отправки)
-    Ctrl + V            — вставить текст или изображение из буфера обмена
-    Escape или × кнопка — скрыть окно (история сохраняется)
-    Ctrl + C / X / Z    — стандартные операции с текстом
-
-
-СЦЕНАРИЙ 1 — ОКНО ЧАТА (Ctrl + Space)
---------------------------------------
-
-Используется для диалога с AI в течение сессии.
-
-1. Нажмите Ctrl + Space — появится окно чата.
-2. Введите вопрос или задачу в поле внизу.
-3. Нажмите Enter — сообщение отправится, ответ появится по мере генерации.
-4. Продолжайте диалог — история переписки сохраняется до закрытия приложения.
-5. Нажмите Escape, кнопку × в заголовке окна, или Ctrl + Space повторно —
-   окно скроется, история останется.
-
-Окно не отображается в панели задач и трее ни в каком состоянии.
-Единственный способ вернуть его — хоткей (Ctrl+Space или Ctrl+Shift+Space).
-Закрытие терминала, через который запускалось приложение, не останавливает MCKO.
-
-Вставка изображения:
-  - Скопируйте изображение в буфер обмена (PrintScreen, Ctrl+C в просмотрщике и т.д.)
-  - В поле ввода нажмите Ctrl + V
-  - Вместо самого изображения появится метка: [added pic1]
-  - Метка удаляется целиком: достаточно нажать Backspace рядом с ней
-  - Можно вставить несколько изображений — они пронумеруются: pic1, pic2, ...
-  - Нажмите Enter — изображение будет отправлено вместе с текстом
+  Enter                 send
+  Shift + Enter         newline
+  Ctrl + V              paste text or image
+  Escape / ×            hide window
 
 
-СЦЕНАРИЙ 2 — ФОНОВЫЙ ЗАПРОС (Ctrl + Alt + Space)
---------------------------------------------------
+MAIN GUI FLOW
+-------------
 
-Используется без открытия окна. Работает в любой момент.
+1. Press Ctrl+Space.
+2. Type a task or paste one/more images.
+3. Press Enter.
+4. The response worker calls `GeometryPhotoSolver`.
+5. The UI shows only the final answer.
 
-Для текста:
-  1. Выделите нужный текст в любом приложении и скопируйте (Ctrl + C).
-  2. Нажмите Ctrl + Alt + Space.
-  3. Подождите несколько секунд.
-  4. Вставьте результат (Ctrl + V) — в буфере будет ответ AI.
+Image paste:
 
-Для изображения:
-  1. Скопируйте изображение в буфер (PrintScreen, Ctrl+C и т.д.).
-  2. Нажмите Ctrl + Alt + Space.
-  3. Подождите несколько секунд.
-  4. Вставьте результат (Ctrl + V) — в буфере будет текстовый ответ AI.
-
-Никакое окно не открывается. Процесс полностью фоновый.
+  - pasted images become labels like `[added pic1]`
+  - several images are allowed
+  - image labels are converted to OpenRouter `image_url` content blocks on send
 
 
-КОНФИГУРАЦИЯ (.env)
--------------------
+BACKGROUND CLIPBOARD FLOW
+-------------------------
 
-  OPENROUTER_API_KEY    API-ключ (получить на https://openrouter.ai/keys)
-  PHOTO_SOLVER_KIMI_MODEL   primary solver (по умолчанию: moonshotai/kimi-k2.6)
-  PHOTO_SOLVER_QWEN_MODEL   parser / OCR / visual extraction
-  PHOTO_SOLVER_LLAMA_MODEL  verifier
-  HOTKEY_WINDOW         Переключить окно (по умолчанию: <ctrl>+<space>)
-  HOTKEY_SHOW           Только показать окно (по умолчанию: <ctrl>+<shift>+<space>)
-  HOTKEY_CLIPBOARD      Хоткей буфера (по умолчанию: <ctrl>+<alt>+<space>)
-  HOTKEY_SCREENSHOT     Хоткей скриншота (по умолчанию: <ctrl>+<shift>+s)
+Text:
 
-  Формат хоткеев (pynput): <ctrl>, <alt>, <shift>, <space>, <f1>...<f12>, a...z
+  1. Copy text.
+  2. Press Ctrl+Alt+Space.
+  3. Wait.
+  4. Paste the result from clipboard.
 
-Runtime использует два маршрута:
-- text-only → быстрый путь через Kimi 2.6
-- image / image+text → трёхмодельный GeometryPhotoSolver (Qwen → Kimi → Llama)
+Image:
 
-Legacy-переменные OPENROUTER_MODEL / OPENROUTER_MODELS / SYSTEM_PROMPT_1 / SYSTEM_PROMPT_2 больше не используются.
-
-После изменения .env перезапустите приложение (kill + bash run.sh).
+  1. Copy screenshot/image.
+  2. Press Ctrl+Alt+Space.
+  3. Wait.
+  4. Paste answer-only text from clipboard.
 
 
-ЛОГИ
+CONFIGURATION
+-------------
+
+Required:
+
+  OPENROUTER_API_KEY
+
+Models:
+
+  PHOTO_SOLVER_KIMI_MODEL   primary solver, default moonshotai/kimi-k2.6
+  PHOTO_SOLVER_QWEN_MODEL   parser/OCR/visual extraction, default qwen/qwen2.5-vl-72b-instruct
+  PHOTO_SOLVER_LLAMA_MODEL  verifier/repair, default meta-llama/llama-4-maverick
+
+Hotkeys:
+
+  HOTKEY_WINDOW
+  HOTKEY_SHOW
+  HOTKEY_CLIPBOARD
+  HOTKEY_SCREENSHOT
+
+`OPENROUTER_API_KEY` may be raw or base64-encoded. `app/config.py` decodes
+base64 values that do not start with `sk-`.
+
+Legacy variables are not used:
+
+  OPENROUTER_MODEL
+  OPENROUTER_MODELS
+  SYSTEM_PROMPT_1
+  SYSTEM_PROMPT_2
+
+
+CURRENT SOLVER ROUTES
+---------------------
+
+Text-only:
+
+  Kimi K2.6 fast path
+
+Image or image+text:
+
+  Qwen parser -> Kimi solver -> Llama verifier
+
+Hard option-selection image tasks may run an extra focused Qwen option arbiter
+pass when model answers disagree.
+
+
+LOGS
 ----
 
-Все события пишутся в файл mcko.log рядом с main.py:
+Runtime logs:
 
      tail -f mcko.log
 
-Там отображаются: запросы к API, срабатывания хоткеев, ошибки, перезапуски watchdog.
+Useful patterns:
+
+  - `Task solver API error`
+  - `Qwen parser unavailable`
+  - `Primary JSON parse failed`
+  - `JSON repair pass`
+  - `Accepting Qwen challenger answer`
+  - `No safe final answer after consensus`
 
 
-WATCHDOG И АВТОПЕРЕЗАПУСК
---------------------------
+TESTING
+-------
 
-Приложение запускается через watchdog.sh. Если main.py аварийно завершится,
-watchdog автоматически перезапустит его через 3 секунды. Каждый перезапуск
-фиксируется в mcko.log с временной меткой.
+Local checks:
+
+     python3 -m py_compile main.py app/*.py ui/*.py tests/*.py
+     python3 -m unittest discover -s tests -p 'test_*.py'
+
+Live regression suite:
+
+     python3 tests/run_solver_fixture_suite.py user-regression
+
+The live suite requires network and a valid OpenRouter key. It creates
+screenshot-like images and sends image-only blocks through the same
+`GeometryPhotoSolver` code path.
 
 
-СТРУКТУРА ФАЙЛОВ
-----------------
+IMPORTANT NOTES
+---------------
 
-  run.sh          — установка зависимостей и запуск
-  watchdog.sh     — цикл автоперезапуска
-  main.py         — основной процесс
-  .env            — конфигурация (заполняется вручную)
-  .env.example    — шаблон конфигурации
-  mcko.log        — журнал событий (создаётся автоматически)
-  app/            — логика: geometry solver, хоткеи, буфер обмена, история
-  ui/             — интерфейс: окно, область чата, поле ввода
+The app must solve arbitrary tasks, not just math or geometry. Do not add
+hardcoded answers for screenshots.
+
+The target environment is Linux/RosaOS with X11. Always manually verify hotkeys,
+small window behavior, screenshot insertion, clipboard image flow, and
+answer-only output on the target machine after UI changes.
 
 ================================================================================
