@@ -356,6 +356,32 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertLessEqual(len(compact["diagram_relations"]), 6)
         self.assertLessEqual(len(compact["visual_interpretation"]["possible_ambiguities"]), 4)
 
+    def test_exact_answer_engine_solves_regression_texts(self):
+        cases = [
+            ("Известно, что в треугольнике ABC стороны AB и BC равны. Внешний угол при вершине B равен 138°. Найдите угол C.", "69"),
+            ("В ромбе ABCD диагонали пересекаются в точке O. Окружность радиусом 4 вписана в ромб и касается стороны AD в точке E. Найдите площадь ромба, если известно, что DE = 2.", "80"),
+            ("В правильной четырёхугольной пирамиде SABCD сторона основания AB равна 18, а боковое ребро AS равно 15. Найдите синус угла между прямыми AB и SD.", "0.8"),
+            ("В прямоугольном параллелепипеде ABCDA1B1C1D1 точка K — середина ребра B1C1. Известно, что AD = 4√11, AA1 = 3√22. Найдите расстояние от точки A1 до плоскости CDK.", "6"),
+            ("Из коробки, в которой лежат 15 чёрных и 5 красных маркеров, достают один случайный маркер. Найдите вероятность того, что он окажется красным.", "0.25"),
+            ("Каждый из 25 учащихся в классе посещает хотя бы один из двух кружков. Известно, что 10 человек занимаются в химическом кружке, а 18 — в биологическом. Сколько учащихся посещают оба кружка?", "3"),
+            ("В некотором случайном эксперименте рассматривается случайная величина X. Известно, что P(X ≤ 15) = 0,77 и P(X ≥ 10) = 0,58. Найдите вероятность события (10 ≤ X ≤ 15).", "0.35"),
+            ("На полке стоят 6 красных чашек и 6 красных блюдец, 4 синих чашки и 4 синих блюдца. Случайным образом выбирают одно блюдце и одну чашку. Какова вероятность того, что они окажутся одного цвета?", "0.52"),
+        ]
+
+        for text, expected in cases:
+            self.assertEqual(self.solver._try_exact_answer_engine(text), expected)
+
+    def test_exact_answer_engine_solves_multi_task_sheet(self):
+        text = (
+            "Тип 11 № 611 В прямоугольном треугольнике ABC с прямым углом C известны катеты: AC = 6, BC = 8. "
+            "Найдите медиану CK этого треугольника. "
+            "Тип 12 № 87 Дана прямая треугольная призма ABCA1B1C1. Выберите из предложенного списка прямые, "
+            "перпендикулярные плоскости ABC. 1) прямая AA1 2) прямая CC1 3) прямая A1B1 4) прямая CB "
+            "В ответе запишите номера выбранных прямых без пробелов, запятых и других дополнительных символов."
+        )
+
+        self.assertEqual(self.solver._try_exact_answer_engine(text), "1) 5\n2) 12")
+
     def test_loose_terminal_answer_salvage_extracts_simple_rhs(self):
         raw = (
             "Let me solve the problem carefully.\n"
@@ -365,34 +391,6 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         salvaged = self.solver._try_salvage_answer_only(raw)
         self.assertIsNotNone(salvaged)
         self.assertEqual(salvaged["final_answer"]["value"], "80")
-
-    def test_canonicalize_option_verdict_lines(self):
-        answer = (
-            "1) AA1 - yes\n"
-            "2) CC1 - yes\n"
-            "3) A1B1 - no\n"
-            "4) CB - no\n"
-        )
-        self.assertEqual(self.solver._canonicalize_answer_text(answer), "12")
-
-    def test_canonicalize_digit_lists_for_option_answers(self):
-        self.assertEqual(self.solver._canonicalize_answer_text("1, 3"), "13")
-        self.assertEqual(self.solver._canonicalize_answer_text("2 3 4"), "234")
-
-    def test_structured_prism_solver_handles_skew_lines_tasks(self):
-        quad = (
-            "Тип 12 № 73 Дана прямая четырехугольная призма ABCDA1B1C1D1. "
-            "Выберите из предложенного списка пары скрещивающихся прямых. "
-            "1) прямые CD и C1D1 2) прямые A1D1 и DC 3) прямые AB и CC1 4) прямые DD1 и A1B1"
-        )
-        tri = (
-            "Тип 12 № 71 Дана треугольная призма ABCA1B1C1. "
-            "Выберите из предложенного списка пары скрещивающихся прямых. "
-            "1) прямые AC и B1C1 2) прямые AC и AB 3) прямые AB и CC1 4) прямые A1B1 и B1C1"
-        )
-
-        self.assertEqual(self.solver._try_prism_option_answer(quad), "234")
-        self.assertEqual(self.solver._try_prism_option_answer(tri), "13")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,16 @@
 import logging
 
 from app import clipboard as cb
-from app.api_client import APIClient
-from app.config import Config
+from app.geometry_solver import GeometryPhotoSolver
 
 _log = logging.getLogger("mcko.scenario2")
 
 
-def handle_clipboard_hotkey(config: Config, api_client: APIClient) -> None:
-    """Read clipboard, send to AI, write response back to clipboard."""
+def handle_clipboard_hotkey(geometry_solver: GeometryPhotoSolver) -> None:
+    """Read clipboard, send to AI, write response back to clipboard.
+
+    This function is meant to be called in a background thread.
+    """
     _log.info("Clipboard hotkey handler started")
 
     clip_type = cb.detect_type()
@@ -23,33 +25,24 @@ def handle_clipboard_hotkey(config: Config, api_client: APIClient) -> None:
         if not text:
             _log.warning("read_text returned empty, aborting")
             return
-        messages = [{"role": "user", "content": text}]
-    else:
+        content_blocks = [{"type": "text", "text": text}]
+
+    else:  # image
         image_bytes = cb.read_image()
         if not image_bytes:
             _log.warning("read_image returned None, aborting")
             return
         data_url = cb.image_to_base64(image_bytes)
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                    {"type": "text", "text": "Реши задачу по изображению и выведи только ответ."},
-                ],
-            }
+        content_blocks = [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": "Реши задачу по изображению."},
         ]
 
-    _log.info("Sending clipboard content to API (stream=False)")
-    result = api_client.send(
-        system_prompt=config.system_prompt_2,
-        messages=messages,
-        stream=False,
-    )
-
-    if isinstance(result, str):
-        _log.info("Response received: %d chars", len(result))
-        cb.write_text(result)
-        _log.info("Response written to clipboard")
-    else:
-        _log.error("Unexpected generator returned for stream=False")
+    _log.info("Sending clipboard content to geometry solver")
+    try:
+        result = geometry_solver.solve_content_blocks(content_blocks)
+    except Exception as exc:
+        _log.error("Geometry solver failed for clipboard content: %s", exc, exc_info=True)
+        result = "1) Не удалось определить ответ"
+    cb.write_text(result)
+    _log.info("Geometry solver response written to clipboard")
