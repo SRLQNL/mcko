@@ -182,6 +182,96 @@ def build_fixtures() -> List[Dict]:
     ]
 
 
+def build_user_regression_fixtures() -> List[Dict]:
+    return [
+        {
+            "id": 101,
+            "path": make_text_fixture(
+                "user_fixture_101.png",
+                "Углы B и C треугольника ABC равны соответственно 67° и 83°. "
+                "Найдите BC, если радиус окружности, описанной около треугольника ABC, равен 16.",
+            ),
+            "expected": "16",
+        },
+        {
+            "id": 102,
+            "path": make_text_fixture(
+                "user_fixture_102.png",
+                "Биссектрисы углов A и B при боковой стороне AB трапеции ABCD пересекаются в точке F. "
+                "Найдите AB, если AF = 20, BF = 15.",
+            ),
+            "expected": "25",
+        },
+        {
+            "id": 103,
+            "path": make_text_fixture(
+                "user_fixture_103.png",
+                "Дана четырёхугольная пирамида SABCD с вершиной S. Основание ABCD является прямоугольной "
+                "трапецией с прямыми углами A и D. Отрезок SD перпендикулярен плоскости основания. "
+                "Выберите из предложенного списка пары скрещивающихся прямых. "
+                "1) прямые AB и CD "
+                "2) прямые SA и DC "
+                "3) прямые AC и SB "
+                "4) прямые BD и AC "
+                "В ответе запишите номера выбранных пар прямых без пробелов, запятых и других дополнительных символов.",
+            ),
+            "expected": "23",
+        },
+        {
+            "id": 104,
+            "path": make_text_fixture(
+                "user_fixture_104.png",
+                "Дана прямая четырёхугольная призма ABCDA1B1C1D1. Выберите из предложенного списка пары прямых, "
+                "которые лежат в одной плоскости. "
+                "1) прямые CD и C1D1 "
+                "2) прямые BC и AD "
+                "3) прямые AB и CC1 "
+                "4) прямые AB и CD "
+                "В ответе запишите номера выбранных пар прямых без пробелов, запятых и других дополнительных символов.",
+            ),
+            "expected": "124",
+        },
+        {
+            "id": 105,
+            "path": make_text_fixture(
+                "user_fixture_105.png",
+                "В основании прямой призмы лежит прямоугольный треугольник с катетами 8 и 15. "
+                "Найдите расстояние между гипотенузой основания и скрещивающимся с ней ребром.",
+            ),
+            "expected": "120/17",
+        },
+        {
+            "id": 106,
+            "path": make_text_fixture(
+                "user_fixture_106.png",
+                "В кубе ABCDA1B1C1D1, ребро которого равно a. "
+                "Найдите расстояние от вершины B до плоскости AB1C.",
+            ),
+            "expected": "a/sqrt(3)",
+        },
+        {
+            "id": 107,
+            "path": make_fixture_1(),
+            "expected": "69",
+        },
+        {
+            "id": 108,
+            "path": make_fixture_2(),
+            "expected": "80",
+        },
+        {
+            "id": 109,
+            "path": make_fixture_3(),
+            "expected": "0.8",
+        },
+        {
+            "id": 110,
+            "path": make_fixture_4(),
+            "expected": "6",
+        },
+    ]
+
+
 def _path_to_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
     return "data:image/png;base64,%s" % encoded
@@ -193,6 +283,32 @@ def _normalize_answer(text: str) -> str:
     return answer
 
 
+def _canonical_math_answer(text: str) -> str:
+    answer = _normalize_answer(text)
+    if not answer:
+        return ""
+    lowered = answer.lower()
+    lowered = lowered.replace(" ", "")
+    lowered = lowered.replace("\\left", "").replace("\\right", "")
+    lowered = lowered.strip("$")
+    lowered = lowered.replace("\\sqrt{3}", "sqrt(3)")
+    lowered = lowered.replace("√3", "sqrt(3)")
+    lowered = lowered.replace("{", "").replace("}", "")
+    lowered = lowered.replace("\\fracasqrt(3)3", "a/sqrt(3)")
+    lowered = lowered.replace("\\fraca*sqrt(3)3", "a/sqrt(3)")
+    lowered = lowered.replace("(a*sqrt(3))/3", "a/sqrt(3)")
+    lowered = lowered.replace("a*sqrt(3)/3", "a/sqrt(3)")
+    lowered = lowered.replace("asqrt(3)/3", "a/sqrt(3)")
+    lowered = lowered.replace("\\fracasqrt(3)3", "a/sqrt(3)")
+    return lowered
+
+
+def _select_fixtures(argv: List[str]) -> List[Dict]:
+    if len(argv) > 1 and argv[1] == "user-regression":
+        return build_user_regression_fixtures()
+    return build_fixtures()
+
+
 def main() -> None:
     cfg = Config()
     cfg.load()
@@ -202,18 +318,17 @@ def main() -> None:
         qwen_model=cfg.photo_solver_qwen_model,
         llama_model=cfg.photo_solver_llama_model,
     )
-    fixtures = build_fixtures()
+    fixtures = _select_fixtures(sys.argv)
     results = []
     for fixture in fixtures:
         blocks = [
             {"type": "image_url", "image_url": {"url": _path_to_data_url(fixture["path"])}},
-            {"type": "text", "text": "Реши задачу по изображению. Нужен только ответ."},
         ]
         started = time.monotonic()
         result = solver.solve_content_blocks(blocks)
         elapsed = round(time.monotonic() - started, 2)
         normalized = _normalize_answer(result)
-        passed = normalized == fixture["expected"]
+        passed = _canonical_math_answer(result) == _canonical_math_answer(fixture["expected"])
         payload = {
             "id": fixture["id"],
             "expected": fixture["expected"],
@@ -223,7 +338,7 @@ def main() -> None:
             "seconds": elapsed,
             "path": str(fixture["path"]),
         }
-        print(json.dumps(payload, ensure_ascii=False))
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
         results.append(payload)
 
     summary = {
@@ -231,7 +346,7 @@ def main() -> None:
         "total": len(results),
         "avg_seconds": round(sum(item["seconds"] for item in results) / float(len(results)), 2),
     }
-    print("SUMMARY %s" % json.dumps(summary, ensure_ascii=False))
+    print("SUMMARY %s" % json.dumps(summary, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

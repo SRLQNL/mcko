@@ -24,6 +24,8 @@ REPAIR_MAX_TOKENS = 1000
 ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
 DIRECT_SOLVER_CONFIDENCE_THRESHOLD = 0.85
+VERIFIER_ONLY_CONFIDENCE_THRESHOLD = 0.75
+QWEN_CHALLENGER_CONFIDENCE_THRESHOLD = 0.85
 TIE_BREAK_CONFIDENCE_GAP = 0.15
 REPAIRED_MATCH_CONFIDENCE_THRESHOLD = 0.60
 
@@ -142,14 +144,13 @@ class GeometryPhotoSolver:
                 )
 
                 qwen_result = self._call_qwen(preprocessed, user_text)
-                exact_answer = self._try_exact_answer_from_parser(qwen_result, user_text)
-                if exact_answer:
-                    _log.info("Returning exact-engine image answer after parser extraction: %s", exact_answer)
-                    return self._render_answer_only(exact_answer)
                 kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
                 llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
                 consensus = self._compare_results(kimi_result, qwen_result, llama_result)
                 _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
+                qwen_solver_result = None
+                if self._should_run_qwen_solver_challenge(consensus, qwen_result, kimi_result, llama_result):
+                    qwen_solver_result = self._call_qwen_solver(preprocessed, user_text, qwen_result, None)
 
                 if self._should_run_self_check(consensus, kimi_result, llama_result):
                     first_round = {
@@ -169,11 +170,11 @@ class GeometryPhotoSolver:
                         "llama": llama_check,
                         "qwen": qwen_check,
                     }
-                    chosen_answer = self._resolve_multi_round_answer(qwen_result, first_round, second_round)
+                    chosen_answer = self._resolve_multi_round_answer(qwen_result, first_round, second_round, qwen_solver_result)
                     if chosen_answer:
                         _log.info("Returning answer selected across primary/self-check rounds: %s", chosen_answer)
                         return self._render_answer_only(chosen_answer)
-                    if not self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_round["qwen"], first_round["llama"]):
+                    if not self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_round["qwen"], first_round["llama"], qwen_solver_result):
                         consensus = second_round["consensus"]
                         kimi_result = second_round["kimi"]
                         llama_result = second_round["llama"]
@@ -185,7 +186,7 @@ class GeometryPhotoSolver:
                         qwen_result = first_round["qwen"]
                     _log.info("Consensus after self-check: status=%s score=%.3f", consensus["status"], consensus["score"])
 
-                return self._format_user_result(consensus, kimi_result, qwen_result, llama_result)
+                return self._format_user_result(consensus, kimi_result, qwen_result, llama_result, qwen_solver_result)
             except RecoverableProviderError as exc:
                 _log.warning("Recoverable provider failure at top-level solve path: %s", exc)
                 return "1) Не удалось определить ответ"
@@ -205,10 +206,6 @@ class GeometryPhotoSolver:
 
     def _solve_text_only(self, user_text: str) -> str:
         _log.info("Using text-only fast path via Kimi")
-        exact_answer = self._try_exact_answer_engine(user_text)
-        if exact_answer:
-            _log.info("Returning exact-engine text-only answer: %s", exact_answer)
-            return self._render_answer_only(exact_answer)
         try:
             kimi_result = self._call_kimi_text_only(user_text)
         except RecoverableProviderError as exc:
@@ -550,6 +547,40 @@ class GeometryPhotoSolver:
         result = self._request_json(self.kimi_model, KIMI_TEXT_ONLY_SYSTEM_PROMPT, user_content, max_tokens=TEXT_ONLY_MAX_TOKENS)
         return self._normalize_result(result, role="solver")
 
+    def _call_qwen_solver(
+        self,
+        variants: List[Dict[str, Optional[str]]],
+        user_text: str,
+        qwen_result: Dict,
+        mismatch_summary: Optional[str],
+    ) -> Optional[Dict]:
+        prompt = (
+            "You are adjudicating a multiple-choice task from source images.\n"
+            "Independently evaluate each numbered option from the source image and OCR.\n"
+            "Do not summarize. Return strict JSON.\n"
+            "final_answer.value must contain only the concatenated digits of all correct options in ascending order.\n"
+            "If none are correct, return an empty string.\n"
+            "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+        )
+        if user_text:
+            prompt += "User hint:\n%s\n" % user_text
+        prompt += "Qwen parse:\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(qwen_result, role="parser"),
+            ensure_ascii=False,
+        )
+        if mismatch_summary:
+            prompt += "Mismatch summary:\n%s\n" % mismatch_summary
+        user_content = [{"type": "text", "text": prompt}]
+        user_content.extend(self._build_image_blocks(variants))
+        try:
+            result = self._request_json(self.qwen_model, KIMI_SYSTEM_PROMPT, user_content, max_tokens=SOLVER_MAX_TOKENS)
+            normalized = self._normalize_result(result, role="solver")
+            normalized["_solver_origin"] = "qwen_option_arbiter"
+            return normalized
+        except RecoverableProviderError as exc:
+            _log.warning("Qwen option arbiter unavailable on hard case: %s", exc)
+            return None
+
     def _call_llama(
         self,
         variants: List[Dict[str, Optional[str]]],
@@ -810,13 +841,16 @@ class GeometryPhotoSolver:
             _log.warning("Primary JSON parse failed for model=%s chars=%d: %s", model, len(raw_text), exc)
             parsed = None
             repair_error = None
-            salvaged = self._try_salvage_answer_only(raw_text)
-            if salvaged is not None:
-                parsed = salvaged
-                used_repair = True
-                repair_model = "local_answer_salvage"
-                _log.info("Local answer salvage succeeded: source_model=%s", model)
             repair_models = self._repair_models_for_source(model)
+            prefer_remote_repair = self._should_prefer_remote_repair(raw_text)
+            salvaged = None
+            if not prefer_remote_repair:
+                salvaged = self._try_salvage_answer_only(raw_text)
+                if salvaged is not None:
+                    parsed = salvaged
+                    used_repair = True
+                    repair_model = "local_answer_salvage"
+                    _log.info("Local answer salvage succeeded: source_model=%s", model)
             for candidate_model in repair_models:
                 if parsed is not None:
                     break
@@ -840,6 +874,13 @@ class GeometryPhotoSolver:
                         candidate_model,
                         repair_exc,
                     )
+            if parsed is None and prefer_remote_repair:
+                salvaged = self._try_salvage_answer_only(raw_text)
+                if salvaged is not None:
+                    parsed = salvaged
+                    used_repair = True
+                    repair_model = "local_answer_salvage"
+                    _log.info("Local answer salvage succeeded after remote-repair attempts: source_model=%s", model)
             if parsed is None:
                 raise RecoverableProviderError("[Ошибка JSON: модель %s вернула невалидный ответ]" % model) from repair_error
         parsed["_request_meta"] = {
@@ -959,6 +1000,17 @@ class GeometryPhotoSolver:
             "consistency_checks": [],
             "needs_clarification": needs_clarification,
         }
+
+    def _should_prefer_remote_repair(self, raw_text: str) -> bool:
+        text = raw_text or ""
+        if not text.strip():
+            return False
+        if re.search(r"(?im)^\s*(?:final[_\s-]*answer|answer|итог(?:овый)?\s*ответ|ответ)\s*[:=-]", text):
+            return False
+        numbered_lines = re.findall(r"(?im)^\s*\d+\)\s+\S", text)
+        if len(numbered_lines) >= 3:
+            return True
+        return False
 
     def _extract_numbered_answer_block(self, text: str) -> str:
         lines = [line.rstrip() for line in text.splitlines()]
@@ -1472,8 +1524,8 @@ class GeometryPhotoSolver:
         ]
         return "\n".join([part for part in parts if part.strip()])
 
-    def _format_user_result(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
-        final_answer = self._pick_user_answer(consensus, kimi, qwen, llama)
+    def _format_user_result(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict], qwen_solver: Optional[Dict] = None) -> str:
+        final_answer = self._pick_user_answer(consensus, kimi, qwen, llama, qwen_solver)
         if final_answer:
             _log.info(
                 "Returning user answer: status=%s score=%.3f answer=%s",
@@ -1491,7 +1543,7 @@ class GeometryPhotoSolver:
         )
         return "1) Не удалось определить ответ"
 
-    def _pick_user_answer(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict]) -> str:
+    def _pick_user_answer(self, consensus: Dict, kimi: Dict, qwen: Dict, llama: Optional[Dict], qwen_solver: Optional[Dict] = None) -> str:
         kimi_answer = (kimi.get("final_answer") or {}).get("value", "").strip()
         if kimi_answer and not self._looks_like_final_answer(kimi_answer):
             _log.warning("Rejecting solver answer that does not look like a final answer: %s", kimi_answer)
@@ -1505,6 +1557,14 @@ class GeometryPhotoSolver:
                 llama_answer = ""
             llama_confidence = self._coerce_confidence(llama.get("answer_confidence"))
         kimi_confidence = self._coerce_confidence(kimi.get("answer_confidence"))
+        qwen_solver_answer = ""
+        qwen_solver_confidence = 0.0
+        if qwen_solver is not None:
+            qwen_solver_answer = (qwen_solver.get("final_answer") or {}).get("value", "").strip()
+            if qwen_solver_answer and not self._looks_like_final_answer(qwen_solver_answer):
+                _log.warning("Rejecting Qwen challenger answer that does not look like a final answer: %s", qwen_solver_answer)
+                qwen_solver_answer = ""
+            qwen_solver_confidence = self._coerce_confidence(qwen_solver.get("answer_confidence"))
 
         if consensus["status"] == "accepted":
             return kimi_answer or llama_answer
@@ -1516,11 +1576,37 @@ class GeometryPhotoSolver:
         verifier_independent = self._has_independent_verifier(llama)
         solver_degraded = self._solver_is_degraded(kimi)
         solver_repaired = self._used_repair(kimi)
+        if self._can_accept_qwen_challenger(
+            consensus,
+            qwen,
+            kimi,
+            llama,
+            qwen_solver,
+            qwen_solver_answer,
+            qwen_solver_confidence,
+            parser_clear,
+            parser_unavailable,
+        ):
+            _log.info(
+                "Accepting Qwen challenger answer on hard case: score=%.3f kimi_repaired=%s qwen_confidence=%.3f answer=%s",
+                consensus["score"],
+                solver_repaired,
+                qwen_solver_confidence,
+                qwen_solver_answer,
+            )
+            return qwen_solver_answer
 
         if not verifier_independent:
             if solver_degraded:
                 _log.warning("Rejecting answer because only degraded solver output is available without an independent verifier")
                 return ""
+            if kimi_answer and parser_clear and not parser_unavailable and solver_repaired and kimi_confidence >= REPAIRED_MATCH_CONFIDENCE_THRESHOLD:
+                _log.info(
+                    "Accepting repaired Kimi answer without independent verifier because parser is clear "
+                    "and solver produced a stable final answer: kimi_confidence=%.3f",
+                    kimi_confidence,
+                )
+                return kimi_answer
             if kimi_answer and parser_clear and not solver_repaired and kimi_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
                 _log.info("Accepting direct Kimi answer without verifier because parser is clear and solver confidence is high")
                 return kimi_answer
@@ -1545,6 +1631,20 @@ class GeometryPhotoSolver:
             return ""
 
         if llama_answer and not kimi_answer:
+            if (
+                parser_clear
+                and not parser_unavailable
+                and verifier_independent
+                and not self._used_repair(llama or {})
+                and llama_confidence >= VERIFIER_ONLY_CONFIDENCE_THRESHOLD
+            ):
+                _log.info(
+                    "Accepting verifier-only answer because primary solver omitted final_answer, "
+                    "parser is clear, and verifier confidence is high: score=%.3f verifier_confidence=%.3f",
+                    consensus["score"],
+                    llama_confidence,
+                )
+                return llama_answer
             _log.warning(
                 "Rejecting verifier-only answer because primary solver did not provide a stable answer: "
                 "status=%s score=%.3f verifier_confidence=%.3f",
@@ -1568,11 +1668,11 @@ class GeometryPhotoSolver:
 
         return ""
 
-    def _resolve_multi_round_answer(self, default_qwen: Dict, first_round: Dict, second_round: Dict) -> str:
+    def _resolve_multi_round_answer(self, default_qwen: Dict, first_round: Dict, second_round: Dict, qwen_solver: Optional[Dict] = None) -> str:
         first_qwen = first_round.get("qwen") or default_qwen
         second_qwen = second_round.get("qwen") or default_qwen
-        first_answer = self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_qwen, first_round["llama"])
-        second_answer = self._pick_user_answer(second_round["consensus"], second_round["kimi"], second_qwen, second_round["llama"])
+        first_answer = self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_qwen, first_round["llama"], qwen_solver)
+        second_answer = self._pick_user_answer(second_round["consensus"], second_round["kimi"], second_qwen, second_round["llama"], qwen_solver)
 
         if first_answer and not second_answer:
             _log.info("Keeping primary-round answer because self-check did not produce a safe answer")
@@ -1673,10 +1773,88 @@ class GeometryPhotoSolver:
             self._used_repair(llama)
         )
 
+    def _should_run_qwen_solver_challenge(self, consensus: Dict, qwen: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
+        if not self._is_option_selection_task(qwen):
+            return False
+        if "parser unavailable" in ((qwen.get("visual_interpretation") or {}).get("possible_ambiguities") or []):
+            return False
+        if self._parser_has_explicit_ambiguity(qwen):
+            return False
+        if not self._has_option_answer_disagreement(kimi, llama):
+            return False
+        if consensus.get("score", 0.0) >= ACCEPT_SCORE_THRESHOLD:
+            return False
+        return True
+
+    def _can_accept_qwen_challenger(
+        self,
+        consensus: Dict,
+        qwen: Dict,
+        kimi: Dict,
+        llama: Optional[Dict],
+        qwen_solver: Optional[Dict],
+        qwen_solver_answer: str,
+        qwen_solver_confidence: float,
+        parser_clear: bool,
+        parser_unavailable: bool,
+    ) -> bool:
+        if not qwen_solver or not qwen_solver_answer:
+            return False
+        if qwen_solver.get("_solver_origin") != "qwen_option_arbiter":
+            return False
+        if parser_unavailable or not parser_clear:
+            return False
+        if self._used_repair(qwen_solver):
+            return False
+        if self._solver_is_degraded(qwen_solver):
+            return False
+        if qwen_solver_confidence < QWEN_CHALLENGER_CONFIDENCE_THRESHOLD:
+            return False
+        if not self._looks_like_option_answer(qwen_solver_answer):
+            return False
+        if not self._has_option_answer_disagreement(kimi, llama):
+            return False
+        return True
+
+    def _is_option_selection_task(self, qwen: Dict) -> bool:
+        texts = [
+            qwen.get("ocr_text") or "",
+            qwen.get("normalized_problem_text") or "",
+            (qwen.get("target") or {}).get("statement") or "",
+        ]
+        combined = "\n".join(texts).lower()
+        if not combined.strip():
+            return False
+        numbered_items = len(re.findall(r"(?m)(?:^|\s)\d+\)", combined))
+        if numbered_items < 3:
+            return False
+        option_markers = (
+            "запишите номера",
+            "выберите из предложенного списка",
+            "selected pairs",
+            "write the numbers",
+            "select from the proposed list",
+        )
+        return any(marker in combined for marker in option_markers)
+
+    def _looks_like_option_answer(self, answer: str) -> bool:
+        text = (answer or "").strip()
+        return bool(re.match(r"^[1-9]{1,9}$", text))
+
+    def _has_option_answer_disagreement(self, kimi: Dict, llama: Optional[Dict]) -> bool:
+        kimi_answer = ((kimi.get("final_answer") or {}).get("value") or "").strip()
+        llama_answer = ""
+        if llama is not None:
+            llama_answer = ((llama.get("final_answer") or {}).get("value") or "").strip()
+        option_like = [answer for answer in (kimi_answer, llama_answer) if self._looks_like_option_answer(answer)]
+        if len(option_like) >= 2 and len(set(option_like)) >= 2:
+            return True
+        if len(option_like) == 1:
+            return True
+        return False
+
     def _can_accept_repaired_match_without_self_check(self, consensus: Dict, kimi: Dict, llama: Optional[Dict]) -> bool:
         if not self._used_repair(kimi):
-            return False
-        if float(consensus.get("score", 0.0)) < SELF_CHECK_SCORE_THRESHOLD:
             return False
         if self._solver_is_degraded(kimi):
             return False
