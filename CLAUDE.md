@@ -13,7 +13,7 @@ Model roles (env var → default):
 - `MODEL_PARSER=qwen/qwen3-vl-32b-instruct`
   - parser, OCR, visual extraction
   - focused option arbiter for hard "select option numbers" tasks
-- `MODEL_SOLVER=deepseek/deepseek-v3.2`
+- `MODEL_SOLVER=deepseek/deepseek-v4-flash`
   - primary solver
 - `MODEL_VERIFIER=meta-llama/llama-4-maverick`
   - verifier

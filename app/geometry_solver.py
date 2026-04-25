@@ -28,7 +28,7 @@ QWEN_CHALLENGER_CONFIDENCE_THRESHOLD = 0.85
 TIE_BREAK_CONFIDENCE_GAP = 0.15
 REPAIRED_MATCH_CONFIDENCE_THRESHOLD = 0.60
 
-DEFAULT_SOLVER_MODEL = "deepseek/deepseek-v3.2"
+DEFAULT_SOLVER_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_PARSER_MODEL = "qwen/qwen3-vl-32b-instruct"
 DEFAULT_VERIFIER_MODEL = "meta-llama/llama-4-maverick"
 RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
@@ -213,7 +213,7 @@ class GeometryPhotoSolver:
         return session
 
     def _solve_single_model(self, image_urls: List[str], user_text: str) -> str:
-        """Fast single-model path. Parser for images (vision), Kimi for text."""
+        """Fast single-model path. Parser for images (vision), solver for text."""
         if image_urls:
             _log.info("Single-model mode: Parser direct solve (vision+reasoning)")
             preprocessed = self._prepare_variants(image_urls)
@@ -225,7 +225,7 @@ class GeometryPhotoSolver:
                 _log.warning("Single-model image solve failed: %s", exc)
                 return "1) Не удалось определить ответ"
         else:
-            _log.info("Single-model mode: Kimi direct solve (text)")
+            _log.info("Single-model mode: solver direct solve (text)")
             try:
                 result = self._call_solver_text_only(user_text)
             except RecoverableProviderError as exc:
@@ -252,6 +252,10 @@ class GeometryPhotoSolver:
         content.extend(self._build_image_blocks(variants))
         return content
 
+    # Confidence threshold at which we skip the verifier (EMS: Early Majority Stopping).
+    # Only applied for non-option-selection tasks to avoid missing multi-digit answer disagreements.
+    EMS_SKIP_VERIFIER_THRESHOLD = 0.95
+
     def _call_parallel_solvers(
         self,
         variants: List[Dict],
@@ -259,17 +263,24 @@ class GeometryPhotoSolver:
         parser_result: Dict,
         mismatch_summary: Optional[str] = None,
     ) -> Tuple[Dict, Dict]:
-        """Run Kimi and Llama in parallel threads. Llama solves independently (no Kimi anchoring)."""
+        """Run solver and verifier in parallel threads. Verifier solves independently (no solver anchoring)."""
         solver_holder = [None]
         verifier_holder = [None]
+        verifier_skip_event = threading.Event()
 
         def run_solver():
             try:
                 solver_holder[0] = self._call_solver(variants, user_text, parser_result, mismatch_summary)
             except RecoverableProviderError as exc:
                 _log.warning("Parallel solver failed: %s", exc)
+            finally:
+                verifier_skip_event.set()
 
         def run_verifier():
+            verifier_skip_event.wait()
+            if self._ems_should_skip_verifier(solver_holder[0], parser_result):
+                _log.info("EMS: skipping verifier — solver confidence >= %.2f on non-option task", self.EMS_SKIP_VERIFIER_THRESHOLD)
+                return
             try:
                 content = self._build_verifier_independent_content(variants, user_text, parser_result, mismatch_summary)
                 raw = self._request_json(
@@ -303,6 +314,17 @@ class GeometryPhotoSolver:
         )
         return solver_result, verifier_result
 
+    def _ems_should_skip_verifier(self, solver_result: Optional[Dict], parser_result: Dict) -> bool:
+        if solver_result is None:
+            return False
+        if self._is_option_selection_task(parser_result):
+            return False
+        confidence = self._coerce_confidence((solver_result.get("final_answer") or {}).get("confidence") or solver_result.get("answer_confidence"))
+        answer = (solver_result.get("final_answer") or {}).get("value", "").strip()
+        if not answer or not self._looks_like_final_answer(answer):
+            return False
+        return confidence >= self.EMS_SKIP_VERIFIER_THRESHOLD
+
     def _build_verifier_independent_content(
         self,
         variants: List[Dict],
@@ -310,7 +332,7 @@ class GeometryPhotoSolver:
         parser_result: Dict,
         mismatch_summary: Optional[str] = None,
     ) -> List[Dict]:
-        """Build Llama prompt WITHOUT Kimi's answer — true independent solve."""
+        """Build verifier prompt WITHOUT solver's answer — true independent solve."""
         has_image = bool(variants)
         if has_image:
             prompt = (
@@ -342,7 +364,7 @@ class GeometryPhotoSolver:
         return content
 
     def _solve_text_only(self, user_text: str) -> str:
-        _log.info("Using text-only fast path via Kimi")
+        _log.info("Using text-only fast path via solver")
         try:
             solver_result = self._call_solver_text_only(user_text)
         except RecoverableProviderError as exc:
@@ -357,14 +379,14 @@ class GeometryPhotoSolver:
             return "1) Не удалось определить ответ"
 
         if not self._looks_like_final_answer(solver_answer):
-            _log.warning("Text-only Kimi answer rejected as non-final: %s", solver_answer)
+            _log.warning("Text-only solver answer rejected as non-final: %s", solver_answer)
             return "1) Не удалось определить ответ"
 
         if solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
             _log.info("Returning high-confidence text-only answer: conf=%.3f answer=%s", solver_confidence, solver_answer)
             return self._render_answer_only(solver_answer)
 
-        _log.info("Text-only Kimi confidence low (%.3f), verifying with Llama", solver_confidence)
+        _log.info("Text-only solver confidence low (%.3f), verifying with verifier", solver_confidence)
         try:
             verifier_content = self._build_verifier_text_only_content(user_text, solver_result)
             verifier_raw = self._request_json(
@@ -376,7 +398,7 @@ class GeometryPhotoSolver:
 
             if verifier_answer and self._looks_like_final_answer(verifier_answer):
                 if self._normalize_answer_text(solver_answer) == self._normalize_answer_text(verifier_answer):
-                    _log.info("Text-only Kimi+Llama agree: answer=%s", solver_answer)
+                    _log.info("Text-only solver+verifier agree: answer=%s", solver_answer)
                     return self._render_answer_only(solver_answer)
                 if verifier_confidence >= solver_confidence + TIE_BREAK_CONFIDENCE_GAP:
                     _log.info(
@@ -385,11 +407,11 @@ class GeometryPhotoSolver:
                     )
                     return self._render_answer_only(verifier_answer)
                 _log.info(
-                    "Text-only disagreement, keeping Kimi: solver_conf=%.3f verifier_conf=%.3f solver=%s verifier=%s",
+                    "Text-only disagreement, keeping solver: solver_conf=%.3f verifier_conf=%.3f solver=%s verifier=%s",
                     solver_confidence, verifier_confidence, solver_answer, verifier_answer,
                 )
         except RecoverableProviderError as exc:
-            _log.warning("Text-only Llama verification failed, using Kimi answer: %s", exc)
+            _log.warning("Text-only verifier failed, using solver answer: %s", exc)
 
         _log.info("Returning text-only answer: %s", solver_answer)
         return self._render_answer_only(solver_answer)
@@ -631,7 +653,7 @@ class GeometryPhotoSolver:
                 "Verify the user task from the attached text and images and return strict JSON.\n"
                 "Check the interpretation, targets, and final answer for all tasks in order.\n"
                 "Prefer literal OCR text, visible labels, and explicit numeric values from the source over inferred structure when they conflict.\n"
-                "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+                "Do not blindly copy the solver. If unsure, lower confidence or mark ambiguity.\n"
                 "Return a compact JSON object focused on inconsistencies, confidence, and final answer.\n"
                 "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
@@ -639,7 +661,7 @@ class GeometryPhotoSolver:
             prompt = (
                 "Verify the user text task and return strict JSON.\n"
                 "Check the target, reasoning, and final answer.\n"
-                "Do not blindly copy Kimi. If unsure, lower confidence or mark ambiguity.\n"
+                "Do not blindly copy the solver. If unsure, lower confidence or mark ambiguity.\n"
                 "Return a compact JSON object focused on inconsistencies, confidence, and final answer.\n"
                 "%s\n" % SOLVER_JSON_SCHEMA_NOTE
             )
@@ -649,7 +671,7 @@ class GeometryPhotoSolver:
             self._compact_result_for_prompt(parser_result, role="parser"),
             ensure_ascii=False,
         )
-        prompt += "Kimi result:\n%s\n" % json.dumps(
+        prompt += "Solver result:\n%s\n" % json.dumps(
             self._compact_result_for_prompt(solver_result, role="solver"),
             ensure_ascii=False,
         )
@@ -679,13 +701,13 @@ class GeometryPhotoSolver:
     def _build_verifier_text_only_content(self, user_text: str, solver_result: Dict) -> List[Dict]:
         prompt = (
             "Independently verify the solution to this text task and return strict JSON.\n"
-            "Do not blindly copy Kimi. Solve from scratch, then compare.\n"
+            "Do not blindly copy the solver. Solve from scratch, then compare.\n"
             "If unsure, lower confidence. Output only the final answer.\n"
             "%s\n" % SOLVER_JSON_SCHEMA_NOTE
         )
         if user_text:
             prompt += "User task:\n%s\n" % user_text
-        prompt += "Kimi proposed answer (verify independently):\n%s\n" % json.dumps(
+        prompt += "Solver proposed answer (verify independently):\n%s\n" % json.dumps(
             self._compact_result_for_prompt(solver_result, role="solver"),
             ensure_ascii=False,
         )
@@ -715,7 +737,8 @@ class GeometryPhotoSolver:
             "stream": False,
             "max_tokens": max_tokens,
             "temperature": 0,
-            "provider": {"allow_fallbacks": True, "data_collection": "allow"},
+            "provider": {"allow_fallbacks": True, "data_collection": "allow", "sort": "throughput"},
+            "plugins": [{"id": "response-healing"}],
         }
         _log.info("Requesting task JSON: model=%s blocks=%d max_tokens=%d", model, len(user_content), max_tokens)
         response = None
@@ -885,7 +908,8 @@ class GeometryPhotoSolver:
                 "stream": False,
                 "max_tokens": REPAIR_MAX_TOKENS,
                 "temperature": 0,
-                "provider": {"allow_fallbacks": True, "data_collection": "allow"},
+                "provider": {"allow_fallbacks": True, "data_collection": "allow", "sort": "throughput"},
+                "plugins": [{"id": "response-healing"}],
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -1209,7 +1233,7 @@ class GeometryPhotoSolver:
     def _fallback_parser_result(self, user_text: str, variants: List[Dict[str, Optional[str]]]) -> Dict:
         summary = "Parser fallback used because Parser was temporarily unavailable."
         if variants:
-            summary += " The attached images should still be checked directly by Kimi and Llama."
+            summary += " The attached images should still be checked directly by solver and verifier."
         return {
             "task_type": "mixed_task",
             "ocr_text": user_text or "",
@@ -1277,7 +1301,7 @@ class GeometryPhotoSolver:
             "givens": parser_result.get("givens") or [],
             "target": parser_result.get("target") or {"statement": ""},
             "visual_interpretation": {
-                "summary": "Solver fallback used because Kimi was temporarily unavailable.",
+                "summary": "Solver fallback used because primary solver was temporarily unavailable.",
                 "confidence": 0.0,
                 "possible_ambiguities": ambiguities,
             },
@@ -1417,12 +1441,12 @@ class GeometryPhotoSolver:
         # When solver and independent verifier agree on a non-empty answer, that's
         # strong evidence regardless of structural field similarity (diagram/givens
         # fields are often empty for non-geometry tasks).
-        kimi_ans = self._normalize_answer_text(solver["final_answer"].get("value", ""))
-        llama_ans = self._normalize_answer_text(verifier["final_answer"].get("value", ""))
+        solver_ans = self._normalize_answer_text(solver["final_answer"].get("value", ""))
+        verifier_ans = self._normalize_answer_text(verifier["final_answer"].get("value", ""))
         answers_agree = (
             verifier_independent and
-            kimi_ans and llama_ans and
-            kimi_ans == llama_ans and
+            solver_ans and verifier_ans and
+            solver_ans == verifier_ans and
             not self._solver_is_degraded(solver) and
             not parser.get("needs_clarification")
         )
@@ -1537,7 +1561,7 @@ class GeometryPhotoSolver:
         verifier_independent = self._has_independent_verifier(verifier)
         solver_degraded = self._solver_is_degraded(solver)
         solver_repaired = self._used_repair(solver)
-        if self._can_accept_qwen_challenger(
+        if self._can_accept_option_arbiter(
             consensus,
             parser,
             solver,
@@ -1549,7 +1573,7 @@ class GeometryPhotoSolver:
             parser_unavailable,
         ):
             _log.info(
-                "Accepting Parser challenger answer on hard case: score=%.3f kimi_repaired=%s qwen_confidence=%.3f answer=%s",
+                "Accepting Parser challenger answer on hard case: score=%.3f solver_repaired=%s arbiter_confidence=%.3f answer=%s",
                 consensus["score"],
                 solver_repaired,
                 option_arbiter_confidence,
@@ -1563,13 +1587,13 @@ class GeometryPhotoSolver:
                 return ""
             if solver_answer and parser_clear and not parser_unavailable and solver_repaired and solver_confidence >= REPAIRED_MATCH_CONFIDENCE_THRESHOLD:
                 _log.info(
-                    "Accepting repaired Kimi answer without independent verifier because parser is clear "
+                    "Accepting repaired solver answer without independent verifier because parser is clear "
                     "and solver produced a stable final answer: solver_confidence=%.3f",
                     solver_confidence,
                 )
                 return solver_answer
             if solver_answer and parser_clear and not solver_repaired and solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
-                _log.info("Accepting direct Kimi answer without verifier because parser is clear and solver confidence is high")
+                _log.info("Accepting direct solver answer without verifier because parser is clear and solver confidence is high")
                 return solver_answer
             return ""
 
@@ -1587,7 +1611,7 @@ class GeometryPhotoSolver:
 
         if solver_answer and not verifier_answer:
             if parser_clear and not solver_degraded and not solver_repaired and solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
-                _log.info("Accepting Kimi answer because verifier did not provide a competing answer and parser is clear")
+                _log.info("Accepting solver answer because verifier did not provide a competing answer and parser is clear")
                 return solver_answer
             return ""
 
@@ -1617,14 +1641,14 @@ class GeometryPhotoSolver:
 
         if solver_answer and verifier_answer and parser_clear and not solver_degraded and not solver_repaired:
             if solver_confidence >= verifier_confidence + TIE_BREAK_CONFIDENCE_GAP and consensus["score"] >= SELF_CHECK_SCORE_THRESHOLD:
-                _log.info("Accepting Kimi answer on confidence tie-break: solver=%.3f verifier=%.3f", solver_confidence, verifier_confidence)
+                _log.info("Accepting solver answer on confidence tie-break: solver=%.3f verifier=%.3f", solver_confidence, verifier_confidence)
                 return solver_answer
             if verifier_confidence >= solver_confidence + TIE_BREAK_CONFIDENCE_GAP and consensus["score"] >= SELF_CHECK_SCORE_THRESHOLD:
                 _log.info("Accepting verifier answer on confidence tie-break: solver=%.3f verifier=%.3f", solver_confidence, verifier_confidence)
                 return verifier_answer
 
         if solver_answer and consensus["status"] == "self_check" and parser_clear and not parser_unavailable and not solver_degraded and not solver_repaired and solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
-            _log.info("Accepting Kimi answer after self-check because parser is clear and solver output is direct")
+            _log.info("Accepting solver answer after self-check because parser is clear and solver output is direct")
             return solver_answer
 
         return ""
@@ -1747,7 +1771,7 @@ class GeometryPhotoSolver:
             return False
         return True
 
-    def _can_accept_qwen_challenger(
+    def _can_accept_option_arbiter(
         self,
         consensus: Dict,
         parser: Dict,
@@ -1836,9 +1860,9 @@ class GeometryPhotoSolver:
         solver_answer = ((solver.get("final_answer") or {}).get("value") or "").strip()
         if not self._looks_like_final_answer(solver_answer):
             return False
-        qwen_like_clear = True
-        kimi_visual = solver.get("visual_interpretation") or {}
-        ambiguities = kimi_visual.get("possible_ambiguities") or []
+        match_clear = True
+        solver_visual = solver.get("visual_interpretation") or {}
+        ambiguities = solver_visual.get("possible_ambiguities") or []
         if "recovered from non-json output" in ambiguities:
             if self._coerce_confidence((verifier or {}).get("answer_confidence")) < 0.75:
                 return False
@@ -1848,7 +1872,7 @@ class GeometryPhotoSolver:
             return False
         if consensus.get("answer_agreement", 0.0) < 1.0:
             return False
-        return qwen_like_clear
+        return match_clear
 
     def _looks_like_final_answer(self, answer: str) -> bool:
         text = (answer or "").strip()
