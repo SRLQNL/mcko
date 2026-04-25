@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 120)
-PARSER_MAX_TOKENS = 1400
+PARSER_MAX_TOKENS = 2500
 SOLVER_MAX_TOKENS = 1500
 VERIFIER_MAX_TOKENS = 1000
 TEXT_ONLY_MAX_TOKENS = 1200
@@ -593,43 +593,29 @@ class GeometryPhotoSolver:
         qwen_result: Dict,
         mismatch_summary: Optional[str],
     ) -> List[Dict]:
-        has_image = bool(variants)
-        if has_image:
-            prompt = (
-                "Solve the user task from the attached text and images and return strict JSON.\n"
-                "Use the Qwen parse as a helper, but correct it if the source clearly disagrees.\n"
-                "The materials may contain several independent tasks; solve all of them in source order.\n"
-                "Prefer literal OCR text, visible labels, and explicit numeric values from the source over inferred structure when they conflict.\n"
-                "Prioritize correct interpretation over aggressive solving.\n"
-                "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
-                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
-            )
-        else:
-            prompt = (
-                "Solve the user text task and return strict JSON.\n"
-                "Use the Qwen parse as a helper, but reason independently.\n"
-                "If several independent tasks are present, solve all of them in order.\n"
-                "Prioritize faithful interpretation of the source.\n"
-                "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
-                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
-            )
+        prompt = (
+            "Solve the user task and return strict JSON.\n"
+            "Use the parser OCR extract as the source of truth for text, values, and structure.\n"
+            "The materials may contain several independent tasks; solve all of them in source order.\n"
+            "Prioritize faithful interpretation of the parser extract over assumptions.\n"
+            "Return a compact JSON object focused on target, constraints, confidence, and final answer.\n"
+            "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+        )
         if user_text:
             prompt += "User hint:\n%s\n" % user_text
-        prompt += "Qwen parse:\n%s\n" % json.dumps(
+        prompt += "Parser OCR extract:\n%s\n" % json.dumps(
             self._compact_result_for_prompt(qwen_result, role="parser"),
             ensure_ascii=False,
         )
         if mismatch_summary:
             prompt += (
                 "Self-check instruction:\n"
-                "Resolve the task again from scratch using the source itself. "
+                "Resolve the task again from scratch. "
                 "Treat the mismatch summary only as a warning about possible failure modes, not as ground truth.\n"
             )
             prompt += "Self-check mismatch summary:\n%s\n" % mismatch_summary
 
-        content = [{"type": "text", "text": prompt}]
-        content.extend(self._build_image_blocks(variants))
-        return content
+        return [{"type": "text", "text": prompt}]
 
     def _build_llama_content(
         self,
