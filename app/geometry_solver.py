@@ -19,7 +19,7 @@ PARSER_MAX_TOKENS = 2500
 SOLVER_MAX_TOKENS = 1500
 VERIFIER_MAX_TOKENS = 1000
 TEXT_ONLY_MAX_TOKENS = 1200
-REPAIR_MAX_TOKENS = 1200
+REPAIR_MAX_TOKENS = 2000
 ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
 DIRECT_SOLVER_CONFIDENCE_THRESHOLD = 0.85
@@ -37,8 +37,8 @@ _log = logging.getLogger("mcko.geometry_solver")
 
 PARSER_JSON_SCHEMA_NOTE = (
     'Return one valid JSON object with keys: '
-    '"task_type","ocr_text","normalized_problem_text","diagram_entities","diagram_relations",'
-    '"givens","target","visual_interpretation","reasoning_summary","solution_steps",'
+    '"task_type","ocr_text","normalized_problem_text","diagram_relations",'
+    '"givens","target","visual_interpretation",'
     '"final_answer","answer_confidence","consistency_checks","needs_clarification". '
     'Use double quotes. No markdown. No prose outside JSON.'
 )
@@ -839,14 +839,19 @@ class GeometryPhotoSolver:
         return parsed
 
     def _repair_models_for_source(self, model: str) -> List[str]:
+        # Qwen (vision parser) → repair with fast text models, not Qwen itself
+        if model == self.qwen_model:
+            candidates = []
+            if self.kimi_model != self.qwen_model:
+                candidates.append(self.kimi_model)
+            if self.llama_model not in candidates:
+                candidates.append(self.llama_model)
+            return candidates or [self.kimi_model]
+        # Solver → repair with verifier
         if model == self.kimi_model:
-            if self.llama_model == self.kimi_model:
-                return [self.kimi_model]
-            return [self.llama_model]
-        repair_models = [model]
-        if self.llama_model not in repair_models:
-            repair_models.append(self.llama_model)
-        return repair_models
+            return [self.llama_model] if self.llama_model != self.kimi_model else [self.kimi_model]
+        # Verifier or other → repair with solver
+        return [self.kimi_model]
 
     def _is_retryable_status(self, status_code: int) -> bool:
         return status_code in RETRYABLE_STATUSES
@@ -1409,12 +1414,26 @@ class GeometryPhotoSolver:
 
         score = max(0.0, min(1.0, score))
 
+        # When solver and independent verifier agree on a non-empty answer, that's
+        # strong evidence regardless of structural field similarity (diagram/givens
+        # fields are often empty for non-geometry tasks).
+        kimi_ans = self._normalize_answer_text(kimi["final_answer"].get("value", ""))
+        llama_ans = self._normalize_answer_text(llama["final_answer"].get("value", ""))
+        answers_agree = (
+            verifier_independent and
+            kimi_ans and llama_ans and
+            kimi_ans == llama_ans and
+            not self._solver_is_degraded(kimi) and
+            not qwen.get("needs_clarification")
+        )
+        if answers_agree:
+            score = max(score, ACCEPT_SCORE_THRESHOLD)
+
         status = "ambiguous"
         accepted = False
         if (
             verifier_independent and
             score >= ACCEPT_SCORE_THRESHOLD and
-            diagram_agreement >= 0.5 and
             not qwen.get("needs_clarification") and
             not self._solver_is_degraded(kimi) and
             not self._used_repair(kimi)
