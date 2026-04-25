@@ -16,9 +16,9 @@ DEFAULTS = {
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
     "HOTKEY_SCREENSHOT": "<ctrl>+<shift>+s",
-    "PHOTO_SOLVER_KIMI_MODEL": "moonshotai/kimi-k2.6",
+    "PHOTO_SOLVER_KIMI_MODEL": "deepseek/deepseek-chat-v3-0324",
     "PHOTO_SOLVER_QWEN_MODEL": "qwen/qwen2.5-vl-72b-instruct",
-    "PHOTO_SOLVER_LLAMA_MODEL": "meta-llama/llama-4-maverick",
+    "PHOTO_SOLVER_LLAMA_MODEL": "moonshotai/kimi-k2",
 }
 
 

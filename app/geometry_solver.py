@@ -28,9 +28,9 @@ QWEN_CHALLENGER_CONFIDENCE_THRESHOLD = 0.85
 TIE_BREAK_CONFIDENCE_GAP = 0.15
 REPAIRED_MATCH_CONFIDENCE_THRESHOLD = 0.60
 
-DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
+DEFAULT_KIMI_MODEL = "deepseek/deepseek-chat-v3-0324"
 DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
-DEFAULT_LLAMA_MODEL = "meta-llama/llama-4-maverick"
+DEFAULT_LLAMA_MODEL = "moonshotai/kimi-k2"
 RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
 
 _log = logging.getLogger("mcko.geometry_solver")
@@ -733,7 +733,6 @@ class GeometryPhotoSolver:
             "stream": False,
             "max_tokens": max_tokens,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
             "provider": {"allow_fallbacks": True},
         }
         _log.info("Requesting task JSON: model=%s blocks=%d max_tokens=%d", model, len(user_content), max_tokens)
@@ -899,7 +898,6 @@ class GeometryPhotoSolver:
                 "stream": False,
                 "max_tokens": REPAIR_MAX_TOKENS,
                 "temperature": 0,
-                "response_format": {"type": "json_object"},
                 "provider": {"allow_fallbacks": True},
             },
             timeout=REQUEST_TIMEOUT,
