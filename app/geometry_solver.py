@@ -14,12 +14,12 @@ from PIL import Image
 from requests.adapters import HTTPAdapter
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-REQUEST_TIMEOUT = (20, 90)
-PARSER_MAX_TOKENS = 1200
-SOLVER_MAX_TOKENS = 1100
-VERIFIER_MAX_TOKENS = 700
-TEXT_ONLY_MAX_TOKENS = 700
-REPAIR_MAX_TOKENS = 1000
+REQUEST_TIMEOUT = (20, 120)
+PARSER_MAX_TOKENS = 1400
+SOLVER_MAX_TOKENS = 1500
+VERIFIER_MAX_TOKENS = 1000
+TEXT_ONLY_MAX_TOKENS = 1200
+REPAIR_MAX_TOKENS = 1200
 ACCEPT_SCORE_THRESHOLD = 0.85
 SELF_CHECK_SCORE_THRESHOLD = 0.65
 DIRECT_SOLVER_CONFIDENCE_THRESHOLD = 0.85
@@ -51,48 +51,55 @@ SOLVER_JSON_SCHEMA_NOTE = (
 )
 
 KIMI_SYSTEM_PROMPT = (
-    "You are the primary solver for mixed user tasks from text and images. "
-    "Reason as fully as needed internally before deciding on the answer. "
-    "Prioritize correct interpretation of the source over speed. "
-    "Handle any domain, not only mathematics. "
-    "If several independent tasks are present, solve all of them in source order. "
-    "Do not let the requirement of concise final output reduce reasoning quality. "
-    "Do not emit full derivations or long reasoning text. "
-    "If the task is solvable, final_answer.value must contain only the final answer content. "
-    "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
+    "You are the primary solver for Russian school and exam tasks (ЕГЭ, ОГЭ, ВПР, МЦКО, МЭШ, МЦКО). "
+    "Tasks come from any subject: math, physics, chemistry, biology, history, geography, "
+    "Russian language, literature, informatics, social science, or other. "
+    "The task text and/or images may be in Russian or another language. "
+    "Reason fully before deciding. Prioritize correct interpretation over speed. "
+    "If several independent tasks are present, solve all in source order. "
+    "Output only the final answer — no derivations, no reasoning text, no explanations. "
+    "For matching tasks (установите соответствие): answer as digit sequence like '2341'. "
+    "For multiple-choice tasks (запишите номера / укажите цифры): only the correct digits like '135'. "
+    "For calculation/formula tasks: give numeric result or formula. "
+    "For word-fill tasks: the exact word or short phrase. "
+    "If the task is solvable, final_answer.value must contain only the final answer. "
+    "For multiple independent answers, use: '1) ...\\n2) ...'. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
 QWEN_SYSTEM_PROMPT = (
-    "You are the parser and extractor for mixed user tasks from text and images. "
-    "Extract OCR text, task boundaries, entities, relations, givens, targets, and ambiguities. "
-    "Handle any domain, not only mathematics. "
-    "If several independent tasks are present, preserve their order. "
-    "Keep extracted summaries concise and avoid verbose restatement. "
-    "Do not optimize for solving. Lower confidence instead of guessing. "
-    "Leave final_answer empty unless the answer is explicitly printed in the source itself. "
+    "You are the parser and OCR extractor for Russian school tasks from text and images. "
+    "Tasks come from any subject: math, physics, chemistry, biology, history, geography, "
+    "Russian language, informatics, or social science. "
+    "Extract OCR text carefully — pay attention to Cyrillic, math formulas, tables, diagrams. "
+    "Extract task boundaries, givens, targets, entities, relations, and ambiguities. "
+    "Preserve the source order of multiple tasks. "
+    "Do not optimize for solving. Lower confidence when unsure; do not guess. "
+    "Leave final_answer empty unless explicitly printed in the source. "
     + PARSER_JSON_SCHEMA_NOTE
 )
 
 LLAMA_SYSTEM_PROMPT = (
-    "You are the independent verifier for mixed user tasks from text and images. "
-    "Re-check interpretation, target, reasoning, and final answer without blindly copying the proposed result. "
-    "Handle any domain, not only mathematics. "
-    "If several independent tasks are present, verify all of them in source order. "
-    "Do not let the requirement of concise final output reduce reasoning quality. "
-    "Do not emit full derivations or long reasoning text. "
+    "You are the independent verifier for Russian school and exam tasks (ЕГЭ, ОГЭ, ВПР, МЦКО). "
+    "Tasks come from any subject: math, physics, chemistry, biology, history, geography, "
+    "Russian language, literature, informatics, or other. "
+    "Re-check interpretation, targets, and final answer without blindly copying the proposed result. "
+    "If several independent tasks are present, verify all in source order. "
+    "Output only the final answer — no derivations, no reasoning text. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
 KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
-    "You are the primary solver for user text tasks. "
-    "Reason as fully as needed internally before deciding on the answer. "
-    "Prioritize correctness over speed, but keep the output strictly structured. "
-    "If several independent tasks are present, solve all of them in source order. "
-    "Do not let concise final output reduce reasoning quality. "
-    "Do not emit full derivations or long reasoning text. "
-    "If the task is solvable, final_answer.value must contain only the final answer content. "
-    "For multiple answers, use a short numbered list like '1) ...\\n2) ...'. "
+    "You are the primary solver for Russian school and exam text tasks (ЕГЭ, ОГЭ, ВПР, МЦКО, МЭШ). "
+    "Tasks come from any subject: math, physics, chemistry, biology, history, geography, "
+    "Russian language, literature, informatics, or social science. "
+    "Reason fully before deciding. Prioritize correctness over speed. "
+    "If several independent tasks are present, solve all in source order. "
+    "Output only the final answer — no derivations, no reasoning text. "
+    "For matching tasks: digit sequence like '2341'. "
+    "For multiple-choice tasks: only the correct digits like '135'. "
+    "If the task is solvable, final_answer.value must contain only the final answer. "
+    "For multiple answers, use: '1) ...\\n2) ...'. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -122,16 +129,19 @@ class GeometryPhotoSolver:
             self.llama_model,
         )
 
-    def solve_content_blocks(self, content_blocks: List[Dict]) -> str:
+    def solve_content_blocks(self, content_blocks: List[Dict], multi_model: bool = True) -> str:
         image_urls, user_text = self._extract_image_payload(content_blocks)
         if not image_urls and not user_text.strip():
             return "1) Не удалось определить ответ"
 
         started_at = time.monotonic()
-        _log.info("Waiting for solver slot: has_images=%s", bool(image_urls))
+        _log.info("Waiting for solver slot: has_images=%s multi_model=%s", bool(image_urls), multi_model)
         with self._solve_lock:
-            _log.info("Solver slot acquired: has_images=%s", bool(image_urls))
+            _log.info("Solver slot acquired")
             try:
+                if not multi_model:
+                    return self._solve_single_model(image_urls, user_text)
+
                 if not image_urls:
                     return self._solve_text_only(user_text)
 
@@ -139,14 +149,18 @@ class GeometryPhotoSolver:
                 _log.info(
                     "Prepared request variants: image_count=%d auxiliary_crops=%d",
                     len(preprocessed),
-                    len([variant for variant in preprocessed if variant.get("text_crop") or variant.get("diagram_crop")]),
+                    len([v for v in preprocessed if v.get("text_crop") or v.get("diagram_crop")]),
                 )
 
+                # Step 1: Qwen OCR (sequential — provides context for both solvers)
                 qwen_result = self._call_qwen(preprocessed, user_text)
-                kimi_result = self._call_kimi(preprocessed, user_text, qwen_result, None)
-                llama_result = self._call_llama(preprocessed, user_text, qwen_result, kimi_result, None)
+
+                # Step 2: Kimi + Llama solve IN PARALLEL, Llama independent (no anchoring)
+                kimi_result, llama_result = self._call_parallel_solvers(preprocessed, user_text, qwen_result)
+
                 consensus = self._compare_results(kimi_result, qwen_result, llama_result)
-                _log.info("Consensus after llama: status=%s score=%.3f", consensus["status"], consensus["score"])
+                _log.info("Consensus after parallel solve: status=%s score=%.3f", consensus["status"], consensus["score"])
+
                 qwen_solver_result = None
                 if self._should_run_qwen_solver_challenge(consensus, qwen_result, kimi_result, llama_result):
                     qwen_solver_result = self._call_qwen_solver(preprocessed, user_text, qwen_result, None)
@@ -159,10 +173,9 @@ class GeometryPhotoSolver:
                         "qwen": qwen_result,
                     }
                     mismatch_summary = self._build_mismatch_summary(consensus, kimi_result, qwen_result, llama_result)
-                    _log.info("Running self-check round: %s", mismatch_summary)
+                    _log.info("Running parallel self-check round: %s", mismatch_summary)
                     qwen_check = self._call_qwen(preprocessed, user_text, mismatch_summary)
-                    kimi_check = self._call_kimi(preprocessed, user_text, qwen_check, mismatch_summary)
-                    llama_check = self._call_llama(preprocessed, user_text, qwen_check, kimi_check, mismatch_summary)
+                    kimi_check, llama_check = self._call_parallel_solvers(preprocessed, user_text, qwen_check, mismatch_summary)
                     second_round = {
                         "consensus": self._compare_results(kimi_check, qwen_check, llama_check),
                         "kimi": kimi_check,
@@ -171,7 +184,7 @@ class GeometryPhotoSolver:
                     }
                     chosen_answer = self._resolve_multi_round_answer(qwen_result, first_round, second_round, qwen_solver_result)
                     if chosen_answer:
-                        _log.info("Returning answer selected across primary/self-check rounds: %s", chosen_answer)
+                        _log.info("Returning answer from parallel multi-round: %s", chosen_answer)
                         return self._render_answer_only(chosen_answer)
                     if not self._pick_user_answer(first_round["consensus"], first_round["kimi"], first_round["qwen"], first_round["llama"], qwen_solver_result):
                         consensus = second_round["consensus"]
@@ -194,7 +207,7 @@ class GeometryPhotoSolver:
                 return "1) Не удалось определить ответ"
             finally:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
-                _log.info("Solve pipeline finished: has_images=%s elapsed_ms=%d", bool(image_urls), elapsed_ms)
+                _log.info("Solve pipeline finished: multi_model=%s elapsed_ms=%d", multi_model, elapsed_ms)
 
     def _build_http_session(self) -> requests.Session:
         session = requests.Session()
@@ -203,6 +216,135 @@ class GeometryPhotoSolver:
         session.mount("http://", adapter)
         return session
 
+    def _solve_single_model(self, image_urls: List[str], user_text: str) -> str:
+        """Fast single-model path. Qwen for images (vision), Kimi for text."""
+        if image_urls:
+            _log.info("Single-model mode: Qwen direct solve (vision+reasoning)")
+            preprocessed = self._prepare_variants(image_urls)
+            content = self._build_single_model_content(preprocessed, user_text)
+            try:
+                raw = self._request_json(self.qwen_model, KIMI_SYSTEM_PROMPT, content, max_tokens=SOLVER_MAX_TOKENS)
+                result = self._normalize_result(raw, role="solver")
+            except RecoverableProviderError as exc:
+                _log.warning("Single-model image solve failed: %s", exc)
+                return "1) Не удалось определить ответ"
+        else:
+            _log.info("Single-model mode: Kimi direct solve (text)")
+            try:
+                result = self._call_kimi_text_only(user_text)
+            except RecoverableProviderError as exc:
+                _log.warning("Single-model text solve failed: %s", exc)
+                return "1) Не удалось определить ответ"
+
+        answer = (result.get("final_answer") or {}).get("value", "").strip()
+        if answer and self._looks_like_final_answer(answer):
+            _log.info("Single-model answer: %s", answer)
+            return self._render_answer_only(answer)
+        _log.warning("Single-model produced no valid answer")
+        return "1) Не удалось определить ответ"
+
+    def _build_single_model_content(self, variants: List[Dict], user_text: str) -> List[Dict]:
+        prompt = (
+            "Solve the user task from the images and return strict JSON.\n"
+            "Read all text from the images, identify the problem, solve it.\n"
+            "Return only the final answer in final_answer.value.\n"
+            "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+        )
+        if user_text:
+            prompt += "User note:\n%s\n" % user_text
+        content = [{"type": "text", "text": prompt}]
+        content.extend(self._build_image_blocks(variants))
+        return content
+
+    def _call_parallel_solvers(
+        self,
+        variants: List[Dict],
+        user_text: str,
+        qwen_result: Dict,
+        mismatch_summary: Optional[str] = None,
+    ) -> Tuple[Dict, Dict]:
+        """Run Kimi and Llama in parallel threads. Llama solves independently (no Kimi anchoring)."""
+        kimi_holder = [None]
+        llama_holder = [None]
+
+        def run_kimi():
+            try:
+                kimi_holder[0] = self._call_kimi(variants, user_text, qwen_result, mismatch_summary)
+            except RecoverableProviderError as exc:
+                _log.warning("Parallel Kimi failed: %s", exc)
+
+        def run_llama():
+            try:
+                content = self._build_llama_independent_content(variants, user_text, qwen_result, mismatch_summary)
+                raw = self._request_json(
+                    self.llama_model, LLAMA_SYSTEM_PROMPT, content, max_tokens=VERIFIER_MAX_TOKENS
+                )
+                llama_holder[0] = self._normalize_result(raw, role="verifier")
+            except RecoverableProviderError as exc:
+                _log.warning("Parallel Llama failed: %s", exc)
+
+        t_kimi = threading.Thread(target=run_kimi, name="parallel-kimi", daemon=True)
+        t_llama = threading.Thread(target=run_llama, name="parallel-llama", daemon=True)
+        t_kimi.start()
+        t_llama.start()
+        t_kimi.join()
+        t_llama.join()
+
+        kimi_result = kimi_holder[0]
+        llama_result = llama_holder[0]
+
+        if kimi_result is None:
+            kimi_result = self._fallback_solver_result(user_text, qwen_result)
+        if llama_result is None:
+            llama_result = self._fallback_verifier_result(
+                kimi_result, reason="parallel verifier unavailable", mirrors_solver=False
+            )
+
+        _log.info(
+            "Parallel solvers done: kimi_answer=%s llama_answer=%s",
+            (kimi_result.get("final_answer") or {}).get("value", ""),
+            (llama_result.get("final_answer") or {}).get("value", ""),
+        )
+        return kimi_result, llama_result
+
+    def _build_llama_independent_content(
+        self,
+        variants: List[Dict],
+        user_text: str,
+        qwen_result: Dict,
+        mismatch_summary: Optional[str] = None,
+    ) -> List[Dict]:
+        """Build Llama prompt WITHOUT Kimi's answer — true independent solve."""
+        has_image = bool(variants)
+        if has_image:
+            prompt = (
+                "Solve the user task from the attached images and return strict JSON.\n"
+                "You are solving INDEPENDENTLY — reason from source images directly.\n"
+                "Do not try to confirm or deny any other model's answer.\n"
+                "Use the parser OCR only as a text extraction aid.\n"
+                "Return a compact JSON with your own final answer and confidence.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+            )
+        else:
+            prompt = (
+                "Solve the user text task and return strict JSON.\n"
+                "Reason independently. Return your own final answer.\n"
+                "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+            )
+        if user_text:
+            prompt += "User hint:\n%s\n" % user_text
+        prompt += "Parser OCR extract:\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(qwen_result, role="parser"),
+            ensure_ascii=False,
+        )
+        if mismatch_summary:
+            prompt += (
+                "Self-check note (treat as hint only, not ground truth):\n%s\n" % mismatch_summary
+            )
+        content = [{"type": "text", "text": prompt}]
+        content.extend(self._build_image_blocks(variants))
+        return content
+
     def _solve_text_only(self, user_text: str) -> str:
         _log.info("Using text-only fast path via Kimi")
         try:
@@ -210,12 +352,51 @@ class GeometryPhotoSolver:
         except RecoverableProviderError as exc:
             _log.warning("Text-only fast path failed: %s", exc)
             return "1) Не удалось определить ответ"
-        final_answer = (kimi_result.get("final_answer") or {}).get("value", "").strip()
-        if final_answer:
-            _log.info("Returning text-only answer: %s", final_answer)
-            return self._render_answer_only(final_answer)
-        _log.warning("Text-only fast path produced no answer")
-        return "1) Не удалось определить ответ"
+
+        kimi_answer = (kimi_result.get("final_answer") or {}).get("value", "").strip()
+        kimi_confidence = self._coerce_confidence(kimi_result.get("answer_confidence"))
+
+        if not kimi_answer:
+            _log.warning("Text-only fast path produced no answer")
+            return "1) Не удалось определить ответ"
+
+        if not self._looks_like_final_answer(kimi_answer):
+            _log.warning("Text-only Kimi answer rejected as non-final: %s", kimi_answer)
+            return "1) Не удалось определить ответ"
+
+        if kimi_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
+            _log.info("Returning high-confidence text-only answer: conf=%.3f answer=%s", kimi_confidence, kimi_answer)
+            return self._render_answer_only(kimi_answer)
+
+        _log.info("Text-only Kimi confidence low (%.3f), verifying with Llama", kimi_confidence)
+        try:
+            llama_content = self._build_llama_text_only_content(user_text, kimi_result)
+            llama_raw = self._request_json(
+                self.llama_model, LLAMA_SYSTEM_PROMPT, llama_content, max_tokens=TEXT_ONLY_MAX_TOKENS
+            )
+            llama_result = self._normalize_result(llama_raw, role="verifier")
+            llama_answer = (llama_result.get("final_answer") or {}).get("value", "").strip()
+            llama_confidence = self._coerce_confidence(llama_result.get("answer_confidence"))
+
+            if llama_answer and self._looks_like_final_answer(llama_answer):
+                if self._normalize_answer_text(kimi_answer) == self._normalize_answer_text(llama_answer):
+                    _log.info("Text-only Kimi+Llama agree: answer=%s", kimi_answer)
+                    return self._render_answer_only(kimi_answer)
+                if llama_confidence >= kimi_confidence + TIE_BREAK_CONFIDENCE_GAP:
+                    _log.info(
+                        "Text-only verifier preferred over solver: kimi_conf=%.3f llama_conf=%.3f answer=%s",
+                        kimi_confidence, llama_confidence, llama_answer,
+                    )
+                    return self._render_answer_only(llama_answer)
+                _log.info(
+                    "Text-only disagreement, keeping Kimi: kimi_conf=%.3f llama_conf=%.3f kimi=%s llama=%s",
+                    kimi_confidence, llama_confidence, kimi_answer, llama_answer,
+                )
+        except RecoverableProviderError as exc:
+            _log.warning("Text-only Llama verification failed, using Kimi answer: %s", exc)
+
+        _log.info("Returning text-only answer: %s", kimi_answer)
+        return self._render_answer_only(kimi_answer)
 
     def _extract_image_payload(self, content_blocks: List[Dict]) -> Tuple[List[str], str]:
         image_urls = []
@@ -513,6 +694,21 @@ class GeometryPhotoSolver:
             prompt += "User task:\n%s\n" % user_text
         return [{"type": "text", "text": prompt}]
 
+    def _build_llama_text_only_content(self, user_text: str, kimi_result: Dict) -> List[Dict]:
+        prompt = (
+            "Independently verify the solution to this text task and return strict JSON.\n"
+            "Do not blindly copy Kimi. Solve from scratch, then compare.\n"
+            "If unsure, lower confidence. Output only the final answer.\n"
+            "%s\n" % SOLVER_JSON_SCHEMA_NOTE
+        )
+        if user_text:
+            prompt += "User task:\n%s\n" % user_text
+        prompt += "Kimi proposed answer (verify independently):\n%s\n" % json.dumps(
+            self._compact_result_for_prompt(kimi_result, role="solver"),
+            ensure_ascii=False,
+        )
+        return [{"type": "text", "text": prompt}]
+
     def _build_image_blocks(self, variants: List[Dict[str, Optional[str]]]) -> List[Dict]:
         content = []
         for index, variant in enumerate(variants, start=1):
@@ -582,7 +778,7 @@ class GeometryPhotoSolver:
             _log.error("Task solver API error: model=%s attempt=%d status=%d request_id=%s body=%s", model, attempt, response.status_code, request_id, body)
             last_error = RecoverableProviderError("[Ошибка API %d: %s]" % (response.status_code, body))
             if self._is_retryable_status(response.status_code) and attempt < 2:
-                self._sleep_before_retry(attempt)
+                self._sleep_before_retry(attempt, status_code=response.status_code)
                 continue
             raise last_error
 
@@ -674,8 +870,11 @@ class GeometryPhotoSolver:
     def _is_retryable_status(self, status_code: int) -> bool:
         return status_code in RETRYABLE_STATUSES
 
-    def _sleep_before_retry(self, attempt: int) -> None:
-        delay = 1.0 if attempt <= 1 else 2.0
+    def _sleep_before_retry(self, attempt: int, status_code: int = 0) -> None:
+        if status_code == 429:
+            delay = 4.0 if attempt <= 1 else 8.0
+        else:
+            delay = 1.0 if attempt <= 1 else 2.0
         time.sleep(delay)
 
     def _repair_non_json_response(self, model: str, raw_text: str, source_model: str) -> str:
@@ -1593,7 +1792,17 @@ class GeometryPhotoSolver:
             return False
         option_markers = (
             "запишите номера",
+            "укажите номера",
+            "запишите цифры",
+            "укажите цифры",
+            "запишите в ответ цифры",
+            "в ответ запишите цифры",
+            "запишите в ответ номера",
             "выберите из предложенного списка",
+            "выберите все",
+            "установите соответствие",
+            "выберите верные",
+            "какие из",
             "selected pairs",
             "write the numbers",
             "select from the proposed list",
@@ -1651,7 +1860,7 @@ class GeometryPhotoSolver:
             normalized_lines = [re.sub(r"^\d+\)\s*", "", line).strip() for line in lines]
             return all(self._looks_like_final_answer(line) for line in normalized_lines if line)
 
-        if len(text) > 80:
+        if len(text) > 160:
             return False
         lowered = text.lower()
         forbidden_markers = (
@@ -1660,15 +1869,16 @@ class GeometryPhotoSolver:
             "cannot determine",
             "insufficient",
             "need clarification",
-            "зависит",
+            "зависит от",
             "неизвест",
-            "недостаточно",
+            "невозможно определить",
+            "нельзя определить",
             "уточн",
         )
         for marker in forbidden_markers:
             if marker in lowered:
                 return False
-        if len(text.split()) > 5:
+        if len(text.split()) > 15:
             return False
         return True
 

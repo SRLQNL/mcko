@@ -42,15 +42,23 @@ CORE RUNTIME TODO
     - check repair source
     - check final selector branch
 
-[ ] Improve provider resilience:
-    - better handling for Qwen `429`
-    - longer/backoff retry for parser on image path
-    - possibly alternate parser model if Qwen is rate-limited
+[x] Improve provider resilience:
+    - 429 now gets 4s/8s retry delay (was 1s/2s)
+    - timeout increased to 120s for slow models
 
-[ ] Improve option-selection task stability:
-    - validate option arbiter output shape
-    - avoid accepting explanations as option digits
-    - keep the arbiter generic, not task-specific
+[x] Improve option-selection task stability:
+    - added Russian markers: укажите номера, запишите цифры,
+      установите соответствие, выберите верные, какие из, etc.
+    - _looks_like_final_answer: 80→160 chars, 5→15 words (handles
+      Russian phrases, matching answers, multi-word subject answers)
+
+[x] Text-only path: add Llama verification when Kimi confidence < 0.85
+    - agree → return; verifier wins on confidence gap; else keep Kimi
+
+[x] System prompts: add Russian school context (ЕГЭ, ОГЭ, ВПР, МЦКО, МЭШ)
+    - explicit subject list, matching/option answer format hints
+    - token limits increased: solver 1100→1500, verifier 700→1000,
+      text-only 700→1200, parser 1200→1400
 
 [ ] Keep JSON failure handling strict:
     - malformed Kimi JSON must not crash worker
