@@ -1,22 +1,23 @@
 # Repository Guidelines
 
 ## Current State
-`main` is currently on the three-model runtime. The active commit before this
-documentation pass was `b32309f` (`Harden solver regression handling`).
+`main` is the active branch. The runtime is the three-model solver in
+`app/geometry_solver.py`. The old single-model `APIClient` runtime is removed.
 
 The app is a small X11/Tkinter desktop tool for solving tasks from text,
-screenshots, clipboard images, and pasted images through OpenRouter. The
-runtime path is centered on `app/geometry_solver.py`.
+screenshots, clipboard images, and pasted images through OpenRouter.
 
-Active model roles:
+Active model roles (env var → default):
 
-- `qwen/qwen3-vl-32b-instruct` - parser, OCR, visual extraction, and option arbiter for hard multiple-choice image tasks. 7× cheaper than prior 72B, 32-language OCR.
-- `deepseek/deepseek-v3.2` - primary solver. IMO 2025 gold medal, strongest math/reasoning.
-- `meta-llama/llama-4-maverick` - verifier and JSON repair model. Fast multimodal.
+- `MODEL_PARSER=qwen/qwen3-vl-32b-instruct` — parser, OCR, visual extraction,
+  and option arbiter for hard multiple-choice image tasks.
+- `MODEL_SOLVER=deepseek/deepseek-v4-flash` — primary text solver. Receives
+  parser OCR extract only; does NOT receive images (text-only model).
+- `MODEL_VERIFIER=meta-llama/llama-4-maverick` — independent verifier and JSON
+  repair model. Receives images and OCR; solves independently of solver.
 
-The old single-model `APIClient` runtime is removed. Do not reintroduce
-`OPENROUTER_MODEL`, `OPENROUTER_MODELS`, `SYSTEM_PROMPT_1`, or
-`SYSTEM_PROMPT_2` as active runtime dependencies without an explicit migration.
+Do not reintroduce `OPENROUTER_MODEL`, `OPENROUTER_MODELS`, `SYSTEM_PROMPT_1`,
+or `SYSTEM_PROMPT_2` as active runtime dependencies without an explicit migration.
 
 ## Project Structure
 Use the repository root for commands.
@@ -35,7 +36,7 @@ Use the repository root for commands.
 
 Operational scripts:
 
-- `bash run.sh` - installs offline dependencies from `packages/`, creates `.env` if needed, starts watchdog.
+- `bash run.sh` - installs offline dependencies from `packages/`, starts watchdog.
 - `bash kill.sh` - stops watchdog/app processes.
 - `python3 main.py` - direct local run when dependencies are installed.
 
@@ -56,35 +57,40 @@ For multiple independent tasks:
 Internal reasoning can be full, but it must not be displayed in the UI or
 clipboard result.
 
-Text-only requests use the fast Kimi path. Image or image+text requests use
+Text-only requests use the solver fast path. Image or image+text requests use
 the three-model pipeline:
 
-1. `Qwen` parses/OCRs the source.
-2. `Kimi` solves from source images plus Qwen parse.
-3. `Llama` verifies and repairs malformed Kimi JSON when needed.
-4. The selector compares answers, confidence, parser ambiguity, repair source,
-   and verifier independence.
-5. For hard option-selection tasks, Qwen may run a focused option arbiter pass.
+1. `Parser` (Qwen) OCRs and extracts task structure from source images.
+2. `Solver` (DeepSeek) solves from parser OCR extract (text only, no images).
+3. `Verifier` (Llama) solves independently from parser OCR plus source images.
+   EMS: skipped if solver confidence ≥ 0.95 on non-option tasks.
+4. The consensus stage compares answers, confidence, parser ambiguity, repair
+   source, and verifier independence.
+5. For hard option-selection tasks, parser may run a focused option arbiter pass.
 
-Do not add hardcoded task answers or formula-specific exact solvers. The repo
-briefly had an exact-engine experiment; it was removed from active code because
-the product must solve arbitrary tasks, not memorized classes.
+All API requests include:
+- `"provider": {"allow_fallbacks": True, "data_collection": "allow", "sort": "throughput"}`
+- `"plugins": [{"id": "response-healing"}]`
+
+Do not add hardcoded task answers or formula-specific exact solvers.
 
 ## Important Solver Risks
 The biggest live failure modes seen so far:
 
-- OpenRouter/Qwen `429` upstream rate limits.
-- Kimi returning prose or malformed JSON instead of strict JSON.
+- OpenRouter/Parser `429` upstream rate limits.
+- Solver returning prose or malformed JSON instead of strict JSON.
 - Local answer salvage extracting a numbered option explanation instead of the final answer.
-- Llama confidently verifying a wrong option subset such as `14` instead of `124`.
+- Verifier confidently verifying a wrong option subset such as `14` instead of `124`.
 - Low-confidence or missing parser output causing `1) Не удалось определить ответ`.
 
 Current mitigations:
 
 - Recoverable provider errors degrade instead of crashing the worker thread.
-- JSON repair for Kimi uses Llama, not Kimi itself.
+- Response healing plugin reduces server-side JSON defects 80-99.8%.
+- JSON repair for solver uses verifier model as formatter, not the solver itself.
 - Option-style prose prefers remote JSON repair before local salvage.
-- Qwen option arbiter is limited to detected "select/write option numbers" tasks with model disagreement.
+- Parser option arbiter is limited to detected "select/write option numbers" tasks with model disagreement.
+- `"sort": "throughput"` reduces timeout and rate-limit errors.
 - Top-level solver errors return `1) Не удалось определить ответ` instead of raw exceptions.
 
 ## Python and Style
@@ -99,16 +105,16 @@ Target Python 3.8 on Linux/RosaOS.
 - Log changed runtime paths with existing `logger.info`, `logger.warning`, `logger.error` patterns.
 
 ## Editing Rules
-Use `apply_patch` for manual edits. Do not revert unrelated user changes.
+Do not revert unrelated user changes.
 
-`AGENTS.md` and `CLAUDE.md` are context files. Runtime code must not depend on
-them.
+`AGENTS.md` and `CLAUDE.md` are context files. Runtime code must not depend on them.
 
-Configuration lives in `.env` and `.env.example`.
+Configuration lives in `.env` (tracked in git).
 
-- `.env` may contain the local test API key encoded in base64.
-- Release archives must sanitize `.env` so `OPENROUTER_API_KEY=` is empty.
-- `app/config.py` preserves base64 decoding for `OPENROUTER_API_KEY`.
+- `.env` may contain a local test key encoded in base64.
+- Release branches must sanitize `.env` so `OPENROUTER_API_KEY=` is empty.
+- There is no `.env.example`. Users on a clean clone insert their key directly.
+- `app/config.py` auto-decodes base64 `OPENROUTER_API_KEY` values.
 
 ## Testing
 Always run after code changes:
@@ -142,9 +148,9 @@ Manual target checks after UI changes:
 ## Git
 Commit messages should be short, imperative, and specific, for example:
 
-- `Harden solver regression handling`
-- `Restore stable three-model runtime`
-- `Retry parser and verifier on rate limits`
+- `Implement research findings: response healing, EMS, V4 Flash`
+- `Rename model roles: kimi/qwen/llama → solver/parser/verifier`
+- `Fix solver 404: remove images from text-only model request`
 
 Do not amend commits unless explicitly requested. Do not use destructive git
 commands unless explicitly requested.

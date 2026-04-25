@@ -14,13 +14,13 @@ Model roles (env var → default):
   - parser, OCR, visual extraction
   - focused option arbiter for hard "select option numbers" tasks
 - `MODEL_SOLVER=deepseek/deepseek-v4-flash`
-  - primary solver
+  - primary solver (text-only; does NOT receive images)
 - `MODEL_VERIFIER=meta-llama/llama-4-maverick`
-  - verifier
+  - independent verifier
   - JSON repair model for malformed solver output
 
 Text-only requests go through a solver fast path. Image and image+text requests
-go through parser -> solver -> verifier.
+go through parser -> solver+verifier (parallel) -> consensus.
 
 The user-facing output contract is strict answer-only:
 
@@ -73,26 +73,30 @@ High-level flow in `GeometryPhotoSolver.solve_content_blocks()`:
 1. Extract text blocks and image data URLs.
 2. If text-only, call `_solve_text_only()`.
 3. If images exist:
-   - `_prepare_variants()` builds image variants.
-   - `_call_qwen()` parses/OCRs.
-   - `_call_kimi()` solves.
-   - `_call_llama()` verifies.
-   - `_compare_results()` scores consistency.
-   - `_should_run_qwen_solver_challenge()` may run a focused Qwen option arbiter.
+   - `_prepare_variants()` builds image variants (full + optional text/diagram crops).
+   - `_call_parser()` OCRs and extracts task structure (parser model, gets images).
+   - `_call_parallel_solvers()` runs solver and verifier concurrently:
+     - Solver receives parser OCR extract as text only (no images — model is text-only).
+     - Verifier receives parser OCR extract plus original images, solves independently.
+     - EMS: verifier is skipped if solver confidence ≥ 0.95 on non-option tasks.
+   - `_compare_results()` scores consistency; agreement boost when solver+verifier match.
+   - `_should_run_option_arbiter()` may run a focused parser option arbiter pass.
    - `_should_run_self_check()` may trigger a second model round.
    - `_pick_user_answer()` chooses a final answer or returns fallback.
 4. On unexpected failures, return `1) Не удалось определить ответ`.
 
-The request API is OpenRouter-compatible `/chat/completions` with `stream=False`
-and `response_format={"type":"json_object"}`.
+All API requests use:
+- `"provider": {"allow_fallbacks": True, "data_collection": "allow", "sort": "throughput"}`
+- `"plugins": [{"id": "response-healing"}]` — free OpenRouter JSON repair, 80-99.8% defect reduction.
 
 ## Known Failure Modes
 These are real issues seen during testing:
 
-- Qwen can return upstream `429`. When that happens, parser quality drops and
+- Parser (Qwen) can return upstream `429`. When that happens, parser quality drops and
   downstream answers can degrade.
-- Kimi often returns prose, reasoning, or malformed JSON despite JSON prompts.
-- Llama can confidently verify wrong option subsets.
+- Solver can return prose, reasoning, or malformed JSON despite JSON prompts.
+  Response healing plugin reduces this significantly server-side.
+- Verifier (Llama) can confidently verify wrong option subsets.
 - Local salvage from prose is dangerous for option-selection tasks because it
   can extract the last numbered option explanation instead of the final digit set.
 - Some valid answers appear in equivalent math forms, for example
@@ -101,10 +105,12 @@ These are real issues seen during testing:
 Current mitigations:
 
 - Recoverable provider failures degrade instead of crashing.
-- Kimi JSON repair uses Llama as formatter/repair model.
+- Solver JSON repair uses verifier model as formatter (not the solver itself).
 - Option-style prose prefers remote repair before local salvage.
-- Qwen option arbiter only runs for detected option-selection tasks with model disagreement.
+- Parser option arbiter only runs for detected option-selection tasks with model disagreement.
 - The final renderer enforces answer-only formatting.
+- `"sort": "throughput"` reduces 429/timeout errors.
+- Response healing plugin eliminates most JSON defects before repair is needed.
 
 ## What Not To Do
 - Do not add hardcoded answers for the user's screenshots.
@@ -116,6 +122,7 @@ Current mitigations:
 - Do not loosen UI output to include explanations.
 - Do not call Tkinter methods directly from hotkey listener threads.
 - Do not break the small hidden X11 window behavior.
+- Do not pass images to the solver model (DeepSeek V4 Flash is text-only).
 
 ## Test Commands
 Local checks:
@@ -160,38 +167,16 @@ Manual GUI checks after UI changes:
 - close through `×`
 - answer-only output
 
-## Current Testing Notes
-Before the docs cleanup, the last pushed code was `main@b32309f`.
-
-Local tests passed after solver changes:
-
-```bash
-python3 -m py_compile main.py app/*.py ui/*.py tests/*.py
-python3 -m unittest discover -s tests -p 'test_*.py'
-```
-
-Live testing in the prior session was unstable because the environment hit
-OpenRouter/Qwen `429` rate limits and model outputs varied. The most useful
-observations:
-
-- `102` and `110` passed after arbitration fixes in targeted live retests.
-- `104` initially failed as `14`; a focused Qwen option arbiter returned `124`
-  in a direct live probe, which motivated the current option-arbiter path.
-- The full `101-110` live run still needs to be repeated on the target machine
-  with network and enough OpenRouter quota.
-
-This current Codex sandbox has restricted network access, so live OpenRouter
-testing may be unavailable here.
-
 ## Release and Secrets
-`.env` may contain a local test key encoded in base64. Release artifacts must
-sanitize `.env` so:
+`.env` is tracked in git. It may contain a local test key encoded in base64.
+Release branches must sanitize `.env` so:
 
 ```text
 OPENROUTER_API_KEY=
 ```
 
-Do not put raw API keys in docs.
+Do not put raw API keys in docs. There is no `.env.example` — users on a clean
+clone insert their own key directly into `.env`.
 
 ## Operational Notes
 `run.sh` installs dependencies from `packages/` using offline mode. Any new
