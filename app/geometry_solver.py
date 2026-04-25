@@ -28,9 +28,9 @@ QWEN_CHALLENGER_CONFIDENCE_THRESHOLD = 0.85
 TIE_BREAK_CONFIDENCE_GAP = 0.15
 REPAIRED_MATCH_CONFIDENCE_THRESHOLD = 0.60
 
-DEFAULT_KIMI_MODEL = "deepseek/deepseek-chat-v3-0324"
-DEFAULT_QWEN_MODEL = "qwen/qwen2.5-vl-72b-instruct"
-DEFAULT_LLAMA_MODEL = "moonshotai/kimi-k2"
+DEFAULT_KIMI_MODEL = "deepseek/deepseek-v3.2"
+DEFAULT_QWEN_MODEL = "qwen/qwen3-vl-32b-instruct"
+DEFAULT_LLAMA_MODEL = "meta-llama/llama-4-maverick"
 RETRYABLE_STATUSES = (408, 429, 502, 503, 504)
 
 _log = logging.getLogger("mcko.geometry_solver")
@@ -51,7 +51,7 @@ SOLVER_JSON_SCHEMA_NOTE = (
 )
 
 KIMI_SYSTEM_PROMPT = (
-    "You are the primary solver for Russian school and exam tasks (ЕГЭ, ОГЭ, ВПР, МЦКО, МЭШ, МЦКО). "
+    "You are the primary solver for Russian school and exam tasks (ЕГЭ, ОГЭ, ВПР, МЦКО, МЭШ). "
     "Tasks come from any subject: math, physics, chemistry, biology, history, geography, "
     "Russian language, literature, informatics, social science, or other. "
     "The task text and/or images may be in Russian or another language. "
@@ -64,6 +64,14 @@ KIMI_SYSTEM_PROMPT = (
     "For word-fill tasks: the exact word or short phrase. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
     "For multiple independent answers, use: '1) ...\\n2) ...'. "
+    "Russian language ударение/орфоэпия rules: follow ФИПИ орфоэпический словник (ЕГЭ). "
+    "Key patterns — verbs: звонИт, включИт, облегчИт, углубИт; "
+    "nouns: жалюзИ, квартАл, каталОг, тОрты; "
+    "short adj: красИва, легкА, правА; "
+    "adverbs: дОсуха, нАчисто, дОнизу. "
+    "Informatics/logic tasks: apply Boolean algebra rules correctly — "
+    "De Morgan's laws (¬(A∧B)=¬A∨¬B, ¬(A∨B)=¬A∧¬B), "
+    "truth table construction, binary/hex arithmetic, complexity and algorithms. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -86,6 +94,8 @@ LLAMA_SYSTEM_PROMPT = (
     "Re-check interpretation, targets, and final answer without blindly copying the proposed result. "
     "If several independent tasks are present, verify all in source order. "
     "Output only the final answer — no derivations, no reasoning text. "
+    "Russian language ударение/орфоэпия: use ФИПИ орфоэпический словник rules. "
+    "Informatics/logic: verify boolean algebra, truth tables, binary/hex arithmetic independently. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -100,6 +110,11 @@ KIMI_TEXT_ONLY_SYSTEM_PROMPT = (
     "For multiple-choice tasks: only the correct digits like '135'. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
     "For multiple answers, use: '1) ...\\n2) ...'. "
+    "Russian language ударение/орфоэпия: follow ФИПИ орфоэпический словник (ЕГЭ). "
+    "Key stress patterns — звонИт, включИт, облегчИт, углубИт, жалюзИ, квартАл, каталОг, "
+    "тОрты, красИва, легкА, правА, дОсуха, нАчисто, дОнизу. "
+    "Informatics/logic: apply Boolean algebra (De Morgan laws), build truth tables, "
+    "binary/hex arithmetic, algorithm complexity. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -733,7 +748,7 @@ class GeometryPhotoSolver:
             "stream": False,
             "max_tokens": max_tokens,
             "temperature": 0,
-            "provider": {"allow_fallbacks": True},
+            "provider": {"allow_fallbacks": True, "data_collection": "allow"},
         }
         _log.info("Requesting task JSON: model=%s blocks=%d max_tokens=%d", model, len(user_content), max_tokens)
         response = None
@@ -898,7 +913,7 @@ class GeometryPhotoSolver:
                 "stream": False,
                 "max_tokens": REPAIR_MAX_TOKENS,
                 "temperature": 0,
-                "provider": {"allow_fallbacks": True},
+                "provider": {"allow_fallbacks": True, "data_collection": "allow"},
             },
             timeout=REQUEST_TIMEOUT,
         )

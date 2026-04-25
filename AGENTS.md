@@ -10,9 +10,9 @@ runtime path is centered on `app/geometry_solver.py`.
 
 Active model roles:
 
-- `Qwen2.5-VL-72B-Instruct` - parser, OCR, visual extraction, and option arbiter for hard multiple-choice image tasks.
-- `Kimi K2.6` - primary solver.
-- `Llama 4 Maverick` - verifier and JSON repair model for Kimi output.
+- `qwen/qwen3-vl-32b-instruct` - parser, OCR, visual extraction, and option arbiter for hard multiple-choice image tasks. 7× cheaper than prior 72B, 32-language OCR.
+- `deepseek/deepseek-v3.2` - primary solver. IMO 2025 gold medal, strongest math/reasoning.
+- `meta-llama/llama-4-maverick` - verifier and JSON repair model. Fast multimodal.
 
 The old single-model `APIClient` runtime is removed. Do not reintroduce
 `OPENROUTER_MODEL`, `OPENROUTER_MODELS`, `SYSTEM_PROMPT_1`, or
