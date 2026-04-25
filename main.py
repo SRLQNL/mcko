@@ -28,9 +28,9 @@ def main():
     # ── Core components ─────────────────────────────────────────────────────
     geometry_solver = GeometryPhotoSolver(
         config.api_key,
-        kimi_model=config.model_solver,
-        qwen_model=config.model_parser,
-        llama_model=config.model_verifier,
+        solver_model=config.model_solver,
+        parser_model=config.model_parser,
+        verifier_model=config.model_verifier,
     )
     session = Session()
     logger.info("Core components initialized")

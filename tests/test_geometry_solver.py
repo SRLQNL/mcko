@@ -56,63 +56,63 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         }
 
     def test_mirrored_verifier_does_not_create_false_accept(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0)
-        kimi = self._make_result(answer="0.6667", solver_origin="degraded_solver", ambiguities=["solver used verifier model"])
-        llama = self._make_result(answer="0.6667", solver_origin="verifier_fallback", mirrors_solver=True)
+        parser = self._make_result(answer="", answer_confidence=0.0)
+        solver = self._make_result(answer="0.6667", solver_origin="degraded_solver", ambiguities=["solver used verifier model"])
+        verifier = self._make_result(answer="0.6667", solver_origin="verifier_fallback", mirrors_solver=True)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertNotEqual(consensus["status"], "accepted")
         self.assertEqual(final_answer, "")
 
     def test_ambiguous_match_requires_clear_parse_and_direct_solver(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=["blurred text"], needs_clarification=True)
-        kimi = self._make_result(answer="80")
-        llama = self._make_result(answer="80")
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=["blurred text"], needs_clarification=True)
+        solver = self._make_result(answer="80")
+        verifier = self._make_result(answer="80")
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertEqual(final_answer, "")
 
     def test_direct_high_confidence_solver_can_survive_missing_verifier(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="42", answer_confidence=0.95)
-        llama = self._make_result(answer="", solver_origin="verifier_fallback", ambiguities=["verifier unavailable"])
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="42", answer_confidence=0.95)
+        verifier = self._make_result(answer="", solver_origin="verifier_fallback", ambiguities=["verifier unavailable"])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertEqual(final_answer, "42")
 
     def test_repaired_solver_answer_can_survive_missing_verifier_when_parser_is_clear(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="25", answer_confidence=0.70, used_repair=True)
-        llama = self._make_result(answer="", solver_origin="verifier_fallback", ambiguities=["verifier unavailable"])
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="25", answer_confidence=0.70, used_repair=True)
+        verifier = self._make_result(answer="", solver_origin="verifier_fallback", ambiguities=["verifier unavailable"])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertEqual(final_answer, "25")
 
     def test_high_confidence_verifier_only_answer_can_be_accepted_when_solver_omits_answer(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="", answer_confidence=0.0)
-        llama = self._make_result(answer="16", answer_confidence=0.95)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="", answer_confidence=0.0)
+        verifier = self._make_result(answer="16", answer_confidence=0.95)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertEqual(final_answer, "16")
 
     def test_verifier_only_answer_is_still_rejected_when_parser_is_ambiguous(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=["cropped figure"], needs_clarification=True)
-        kimi = self._make_result(answer="", answer_confidence=0.0)
-        llama = self._make_result(answer="16", answer_confidence=0.95)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=["cropped figure"], needs_clarification=True)
+        solver = self._make_result(answer="", answer_confidence=0.0)
+        verifier = self._make_result(answer="16", answer_confidence=0.95)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
-        final_answer = self.solver._pick_user_answer(consensus, kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
+        final_answer = self.solver._pick_user_answer(consensus, solver, parser, verifier)
 
         self.assertEqual(final_answer, "")
 
@@ -126,17 +126,17 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         self.assertIn("recovered from non-json output", salvaged["visual_interpretation"]["possible_ambiguities"])
 
     def test_clean_accepted_case_does_not_trigger_extra_self_check(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="69", answer_confidence=0.95)
-        llama = self._make_result(answer="69", answer_confidence=0.93)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="69", answer_confidence=0.95)
+        verifier = self._make_result(answer="69", answer_confidence=0.93)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
         self.assertEqual(consensus["status"], "accepted")
-        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
+        self.assertFalse(self.solver._should_run_self_check(consensus, solver, verifier))
 
     def test_low_score_matching_answers_still_trigger_self_check(self):
-        qwen = self._make_result(
+        parser = self._make_result(
             answer="",
             answer_confidence=0.0,
             givens=[{"statement": "different given"}],
@@ -144,12 +144,12 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             ambiguities=["unclear diagram"],
             needs_clarification=True,
         )
-        kimi = self._make_result(answer="80", answer_confidence=0.92)
-        llama = self._make_result(answer="80", answer_confidence=0.90, givens=[{"statement": "different given"}], relations=[])
+        solver = self._make_result(answer="80", answer_confidence=0.92)
+        verifier = self._make_result(answer="80", answer_confidence=0.90, givens=[{"statement": "different given"}], relations=[])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertTrue(self.solver._should_run_self_check(consensus, kimi, llama))
+        self.assertTrue(self.solver._should_run_self_check(consensus, solver, verifier))
 
     def test_normalize_result_handles_list_visual_and_list_answer(self):
         normalized = self.solver._normalize_result(
@@ -211,7 +211,7 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             self.assertIsInstance(normalized["diagram_relations"], list)
 
     def test_compare_results_survives_repaired_shape_variants(self):
-        qwen = self.solver._normalize_result(
+        parser = self.solver._normalize_result(
             {
                 "target": {"statement": "find area"},
                 "givens": [{"statement": "side=4"}],
@@ -239,28 +239,28 @@ class GeometrySolverConsensusTests(unittest.TestCase):
         ]
 
         for raw in repaired_solver_payloads:
-            kimi = self.solver._normalize_result(raw, role="solver")
-            llama = self.solver._normalize_result(raw, role="verifier")
-            consensus = self.solver._compare_results(kimi, qwen, llama)
+            solver = self.solver._normalize_result(raw, role="solver")
+            verifier = self.solver._normalize_result(raw, role="verifier")
+            consensus = self.solver._compare_results(solver, parser, verifier)
             self.assertIn(consensus["status"], ("accepted", "self_check", "ambiguous"))
 
-    def test_kimi_repair_uses_llama_repair_only(self):
-        repair_models = self.solver._repair_models_for_source(self.solver.kimi_model)
-        self.assertEqual(repair_models, [self.solver.llama_model])
+    def test_solver_repair_uses_verifier_repair_only(self):
+        repair_models = self.solver._repair_models_for_source(self.solver.solver_model)
+        self.assertEqual(repair_models, [self.solver.verifier_model])
 
     def test_repaired_matching_answers_can_skip_expensive_self_check(self):
-        kimi = self._make_result(answer="80", answer_confidence=0.82, used_repair=True)
-        llama = self._make_result(answer="80", answer_confidence=0.78)
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="80", answer_confidence=0.82, used_repair=True)
+        verifier = self._make_result(answer="80", answer_confidence=0.78)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
+        self.assertFalse(self.solver._should_run_self_check(consensus, solver, verifier))
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "80")
 
     def test_repaired_matching_answers_can_be_accepted_below_general_self_check_threshold(self):
-        kimi = self._make_result(answer="25", answer_confidence=0.82, used_repair=True)
-        llama = self._make_result(answer="25", answer_confidence=0.90)
+        solver = self._make_result(answer="25", answer_confidence=0.82, used_repair=True)
+        verifier = self._make_result(answer="25", answer_confidence=0.90)
         consensus = {
             "status": "self_check",
             "score": 0.177,
@@ -268,55 +268,55 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             "reasons": ["low givens agreement", "solver JSON repaired"],
         }
 
-        self.assertTrue(self.solver._can_accept_repaired_match_without_self_check(consensus, kimi, llama))
+        self.assertTrue(self.solver._can_accept_repaired_match_without_self_check(consensus, solver, verifier))
 
     def test_local_salvage_match_with_independent_verifier_is_accepted(self):
-        kimi = self._make_result(answer="0.8", answer_confidence=0.70, used_repair=True)
-        kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
-        llama = self._make_result(answer="0.8", answer_confidence=0.84)
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="0.8", answer_confidence=0.70, used_repair=True)
+        solver["_request_meta"]["repair_model"] = "local_answer_salvage"
+        verifier = self._make_result(answer="0.8", answer_confidence=0.84)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "0.8")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "0.8")
 
     def test_verifier_can_override_local_salvage_mismatch(self):
-        kimi = self._make_result(answer="8", answer_confidence=0.7, used_repair=True)
-        kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
-        llama = self._make_result(answer="80", answer_confidence=0.9)
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="8", answer_confidence=0.7, used_repair=True)
+        solver["_request_meta"]["repair_model"] = "local_answer_salvage"
+        verifier = self._make_result(answer="80", answer_confidence=0.9)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertFalse(self.solver._should_run_self_check(consensus, kimi, llama))
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "80")
+        self.assertFalse(self.solver._should_run_self_check(consensus, solver, verifier))
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "80")
 
     def test_parser_needs_clarification_without_explicit_ambiguity_does_not_block_match(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[], needs_clarification=True)
-        kimi = self._make_result(answer="0.8", answer_confidence=0.88)
-        llama = self._make_result(answer="0.8", answer_confidence=0.87)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[], needs_clarification=True)
+        solver = self._make_result(answer="0.8", answer_confidence=0.88)
+        verifier = self._make_result(answer="0.8", answer_confidence=0.87)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "0.8")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "0.8")
 
     def test_verifier_only_answer_is_rejected_when_solver_has_no_answer_and_parser_is_not_clear(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=["cropped figure"], needs_clarification=True)
-        kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
-        llama = self._make_result(answer="6", answer_confidence=0.91)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=["cropped figure"], needs_clarification=True)
+        solver = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
+        verifier = self._make_result(answer="6", answer_confidence=0.91)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "")
 
-    def test_non_option_qwen_solver_does_not_override_regular_consensus(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="6√2", answer_confidence=0.92, used_repair=True)
-        llama = self._make_result(answer="6√2", answer_confidence=0.93)
-        qwen_solver = self._make_result(answer="6", answer_confidence=0.96)
-        qwen_solver["_solver_origin"] = "qwen_option_arbiter"
-        qwen_solver["_request_meta"]["used_repair"] = False
-        qwen_solver["_request_meta"]["repair_model"] = ""
+    def test_non_option_option_arbiter_does_not_override_regular_consensus(self):
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="6√2", answer_confidence=0.92, used_repair=True)
+        verifier = self._make_result(answer="6√2", answer_confidence=0.93)
+        option_arbiter = self._make_result(answer="6", answer_confidence=0.96)
+        option_arbiter["_solver_origin"] = "option_arbiter"
+        option_arbiter["_request_meta"]["used_repair"] = False
+        option_arbiter["_request_meta"]["repair_model"] = ""
         consensus = {
             "status": "self_check",
             "score": 0.267,
@@ -324,15 +324,15 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             "reasons": ["solver JSON repaired"],
         }
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama, qwen_solver), "6√2")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier, option_arbiter), "6√2")
 
-    def test_non_option_qwen_solver_does_not_override_local_salvage_case(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="35", answer_confidence=0.92, used_repair=True)
-        kimi["_request_meta"]["repair_model"] = "local_answer_salvage"
-        llama = self._make_result(answer="25", answer_confidence=0.93)
-        qwen_solver = self._make_result(answer="35", answer_confidence=0.96)
-        qwen_solver["_solver_origin"] = "qwen_option_arbiter"
+    def test_non_option_option_arbiter_does_not_override_local_salvage_case(self):
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="35", answer_confidence=0.92, used_repair=True)
+        solver["_request_meta"]["repair_model"] = "local_answer_salvage"
+        verifier = self._make_result(answer="25", answer_confidence=0.93)
+        option_arbiter = self._make_result(answer="35", answer_confidence=0.96)
+        option_arbiter["_solver_origin"] = "option_arbiter"
         consensus = {
             "status": "self_check",
             "score": 0.177,
@@ -340,20 +340,20 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             "reasons": ["solver JSON repaired", "answer mismatch"],
         }
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama, qwen_solver), "35")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier, option_arbiter), "35")
 
     def test_option_arbiter_can_override_disagreeing_option_answers(self):
-        qwen = self._make_result(
+        parser = self._make_result(
             answer="",
             answer_confidence=0.0,
             target="write the numbers of the selected pairs",
         )
-        qwen["ocr_text"] = "1) ... 2) ... 3) ... 4) ... В ответе запишите номера выбранных пар"
-        qwen["normalized_problem_text"] = "select from the proposed list 1) ... 2) ... 3) ... 4) ..."
-        kimi = self._make_result(answer="12", answer_confidence=0.7, used_repair=True)
-        llama = self._make_result(answer="14", answer_confidence=0.9)
-        qwen_solver = self._make_result(answer="124", answer_confidence=0.95)
-        qwen_solver["_solver_origin"] = "qwen_option_arbiter"
+        parser["ocr_text"] = "1) ... 2) ... 3) ... 4) ... В ответе запишите номера выбранных пар"
+        parser["normalized_problem_text"] = "select from the proposed list 1) ... 2) ... 3) ... 4) ..."
+        solver = self._make_result(answer="12", answer_confidence=0.7, used_repair=True)
+        verifier = self._make_result(answer="14", answer_confidence=0.9)
+        option_arbiter = self._make_result(answer="124", answer_confidence=0.95)
+        option_arbiter["_solver_origin"] = "option_arbiter"
         consensus = {
             "status": "self_check",
             "score": 0.0,
@@ -361,78 +361,78 @@ class GeometrySolverConsensusTests(unittest.TestCase):
             "reasons": ["answer mismatch"],
         }
 
-        self.assertTrue(self.solver._is_option_selection_task(qwen))
-        self.assertTrue(self.solver._has_option_answer_disagreement(kimi, llama))
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama, qwen_solver), "124")
+        self.assertTrue(self.solver._is_option_selection_task(parser))
+        self.assertTrue(self.solver._has_option_answer_disagreement(solver, verifier))
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier, option_arbiter), "124")
 
     def test_non_final_explanatory_phrase_is_rejected(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        kimi = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9, used_repair=True)
-        llama = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        solver = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9, used_repair=True)
+        verifier = self._make_result(answer="dependent on unknown dimension AB", answer_confidence=0.9)
 
-        consensus = self.solver._compare_results(kimi, qwen, llama)
+        consensus = self.solver._compare_results(solver, parser, verifier)
 
-        self.assertEqual(self.solver._pick_user_answer(consensus, kimi, qwen, llama), "")
+        self.assertEqual(self.solver._pick_user_answer(consensus, solver, parser, verifier), "")
 
     def test_multi_round_selection_keeps_primary_when_self_check_fails(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        primary_kimi = self._make_result(answer="80", answer_confidence=0.93)
-        primary_llama = self._make_result(answer="80", answer_confidence=0.92)
-        self_check_kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
-        self_check_llama = self._make_result(answer="", answer_confidence=0.0)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_solver = self._make_result(answer="80", answer_confidence=0.93)
+        primary_verifier = self._make_result(answer="80", answer_confidence=0.92)
+        self_check_solver = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
+        self_check_verifier = self._make_result(answer="", answer_confidence=0.0)
 
         first_round = {
-            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
-            "kimi": primary_kimi,
-            "llama": primary_llama,
+            "consensus": self.solver._compare_results(primary_solver, parser, primary_verifier),
+            "solver": primary_solver,
+            "verifier": primary_verifier,
         }
         second_round = {
-            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
-            "kimi": self_check_kimi,
-            "llama": self_check_llama,
+            "consensus": self.solver._compare_results(self_check_solver, parser, self_check_verifier),
+            "solver": self_check_solver,
+            "verifier": self_check_verifier,
         }
 
-        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "80")
+        self.assertEqual(self.solver._resolve_multi_round_answer(parser, first_round, second_round), "80")
 
     def test_multi_round_selection_uses_self_check_when_primary_has_no_safe_answer(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        primary_kimi = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
-        primary_llama = self._make_result(answer="", answer_confidence=0.0)
-        self_check_kimi = self._make_result(answer="69", answer_confidence=0.91)
-        self_check_llama = self._make_result(answer="69", answer_confidence=0.90)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_solver = self._make_result(answer="", answer_confidence=0.0, used_repair=True)
+        primary_verifier = self._make_result(answer="", answer_confidence=0.0)
+        self_check_solver = self._make_result(answer="69", answer_confidence=0.91)
+        self_check_verifier = self._make_result(answer="69", answer_confidence=0.90)
 
         first_round = {
-            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
-            "kimi": primary_kimi,
-            "llama": primary_llama,
+            "consensus": self.solver._compare_results(primary_solver, parser, primary_verifier),
+            "solver": primary_solver,
+            "verifier": primary_verifier,
         }
         second_round = {
-            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
-            "kimi": self_check_kimi,
-            "llama": self_check_llama,
+            "consensus": self.solver._compare_results(self_check_solver, parser, self_check_verifier),
+            "solver": self_check_solver,
+            "verifier": self_check_verifier,
         }
 
-        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "69")
+        self.assertEqual(self.solver._resolve_multi_round_answer(parser, first_round, second_round), "69")
 
     def test_multi_round_selection_rejects_close_conflicting_answers(self):
-        qwen = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
-        primary_kimi = self._make_result(answer="12", answer_confidence=0.91)
-        primary_llama = self._make_result(answer="12", answer_confidence=0.90)
-        self_check_kimi = self._make_result(answer="6", answer_confidence=0.92)
-        self_check_llama = self._make_result(answer="6", answer_confidence=0.91)
+        parser = self._make_result(answer="", answer_confidence=0.0, ambiguities=[])
+        primary_solver = self._make_result(answer="12", answer_confidence=0.91)
+        primary_verifier = self._make_result(answer="12", answer_confidence=0.90)
+        self_check_solver = self._make_result(answer="6", answer_confidence=0.92)
+        self_check_verifier = self._make_result(answer="6", answer_confidence=0.91)
 
         first_round = {
-            "consensus": self.solver._compare_results(primary_kimi, qwen, primary_llama),
-            "kimi": primary_kimi,
-            "llama": primary_llama,
+            "consensus": self.solver._compare_results(primary_solver, parser, primary_verifier),
+            "solver": primary_solver,
+            "verifier": primary_verifier,
         }
         second_round = {
-            "consensus": self.solver._compare_results(self_check_kimi, qwen, self_check_llama),
-            "kimi": self_check_kimi,
-            "llama": self_check_llama,
+            "consensus": self.solver._compare_results(self_check_solver, parser, self_check_verifier),
+            "solver": self_check_solver,
+            "verifier": self_check_verifier,
         }
 
-        self.assertEqual(self.solver._resolve_multi_round_answer(qwen, first_round, second_round), "")
+        self.assertEqual(self.solver._resolve_multi_round_answer(parser, first_round, second_round), "")
 
     def test_compact_result_for_prompt_truncates_large_payloads(self):
         result = self._make_result(answer="80", answer_confidence=0.91)
