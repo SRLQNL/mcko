@@ -16,9 +16,9 @@ DEFAULTS = {
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
     "HOTKEY_SCREENSHOT": "<ctrl>+<shift>+s",
-    "PHOTO_SOLVER_KIMI_MODEL": "deepseek/deepseek-v3.2",
-    "PHOTO_SOLVER_QWEN_MODEL": "qwen/qwen3-vl-32b-instruct",
-    "PHOTO_SOLVER_LLAMA_MODEL": "meta-llama/llama-4-maverick",
+    "MODEL_SOLVER": "deepseek/deepseek-v3.2",
+    "MODEL_PARSER": "qwen/qwen3-vl-32b-instruct",
+    "MODEL_VERIFIER": "meta-llama/llama-4-maverick",
 }
 
 
@@ -29,9 +29,9 @@ class Config:
         self.hotkey_show: str = ""
         self.hotkey_clipboard: str = ""
         self.hotkey_screenshot: str = ""
-        self.photo_solver_kimi_model: str = ""
-        self.photo_solver_qwen_model: str = ""
-        self.photo_solver_llama_model: str = ""
+        self.model_solver: str = ""
+        self.model_parser: str = ""
+        self.model_verifier: str = ""
 
     def load(self) -> None:
         logger.info("Loading configuration from .env")
@@ -64,29 +64,27 @@ class Config:
         self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
         self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
         self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
-        self.photo_solver_kimi_model = self._env_or_default("PHOTO_SOLVER_KIMI_MODEL")
-        self.photo_solver_qwen_model = self._env_or_default("PHOTO_SOLVER_QWEN_MODEL")
-        self.photo_solver_llama_model = self._env_or_default("PHOTO_SOLVER_LLAMA_MODEL")
+        self.model_solver = self._env_or_default("MODEL_SOLVER")
+        self.model_parser = self._env_or_default("MODEL_PARSER")
+        self.model_verifier = self._env_or_default("MODEL_VERIFIER")
 
         logger.info(
-            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, kimi=%s, qwen=%s, llama=%s",
+            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, solver=%s, parser=%s, verifier=%s",
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
             self.hotkey_screenshot,
-            self.photo_solver_kimi_model,
-            self.photo_solver_qwen_model,
-            self.photo_solver_llama_model,
+            self.model_solver,
+            self.model_parser,
+            self.model_verifier,
         )
 
     def _normalize_secret(self, value: str) -> str:
-        """Trim whitespace/BOM, unwrap quotes, and base64-decode if needed."""
         logger.info("Normalizing OPENROUTER_API_KEY from environment")
-        normalized = value.strip().lstrip("\ufeff").strip()
+        normalized = value.strip().lstrip("﻿").strip()
         if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in ("'", '"'):
             logger.info("OPENROUTER_API_KEY had surrounding quotes, removing them")
             normalized = normalized[1:-1].strip()
-        # Если ключ не начинается с sk- — считаем что он в base64
         if not normalized.startswith("sk-"):
             try:
                 normalized = base64.b64decode(normalized).decode("utf-8").strip()

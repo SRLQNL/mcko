@@ -6,7 +6,6 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="$SCRIPT_DIR/mcko.log"
 ENV_FILE="$SCRIPT_DIR/.env"
-ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
 PKG_DIR="$SCRIPT_DIR/packages"
 WATCHDOG_PID_FILE="$SCRIPT_DIR/watchdog.pid"
 
@@ -126,31 +125,16 @@ echo "[✓] Dependencies installed"
 echo ""
 echo "── [8/8] Config ─────────────────────────────────────────────────────────────"
 if [ ! -f "$ENV_FILE" ]; then
-    if [ -f "$ENV_EXAMPLE" ]; then
-        cp "$ENV_EXAMPLE" "$ENV_FILE"
-        echo "[*] .env created from template: $ENV_FILE"
-    else
-        echo "[!] .env not found and template is missing: $ENV_FILE"
-        exit 1
-    fi
+    echo "[!] .env not found: $ENV_FILE"
+    echo "[!] Add your OPENROUTER_API_KEY to .env and run bash run.sh again."
+    exit 1
 fi
 echo "[✓] .env found: $ENV_FILE"
 
 if ! grep -Eq '^[[:space:]]*OPENROUTER_API_KEY=[^[:space:]#]+' "$ENV_FILE"; then
-    echo "[!] OPENROUTER_API_KEY is empty in $ENV_FILE"
-    echo "[!] Fill the key in .env and run bash run.sh again."
+    echo "[!] OPENROUTER_API_KEY is empty in .env"
+    echo "[!] Fill in your key and run bash run.sh again."
     exit 1
-fi
-
-for key in PHOTO_SOLVER_KIMI_MODEL PHOTO_SOLVER_QWEN_MODEL PHOTO_SOLVER_LLAMA_MODEL; do
-    if ! grep -Eq "^[[:space:]]*$key=[^[:space:]#]+" "$ENV_FILE"; then
-        echo "[!] $key is empty in $ENV_FILE"
-        echo "[i] The app will use built-in defaults for $key from app/config.py."
-    fi
-done
-
-if grep -Eq '^[[:space:]]*OPENROUTER_MODEL=[^[:space:]#]+' "$ENV_FILE" || grep -Eq '^[[:space:]]*OPENROUTER_MODELS=[^[:space:]#]+' "$ENV_FILE"; then
-    echo "[i] OPENROUTER_MODEL / OPENROUTER_MODELS are legacy settings and are ignored by the current multi-model solver."
 fi
 
 # ── Launch via watchdog ───────────────────────────────────────────────────────

@@ -314,9 +314,9 @@ def main() -> None:
     cfg.load()
     solver = GeometryPhotoSolver(
         cfg.api_key,
-        kimi_model=cfg.photo_solver_kimi_model,
-        qwen_model=cfg.photo_solver_qwen_model,
-        llama_model=cfg.photo_solver_llama_model,
+        kimi_model=cfg.model_solver,
+        qwen_model=cfg.model_parser,
+        llama_model=cfg.model_verifier,
     )
     fixtures = _select_fixtures(sys.argv)
     results = []

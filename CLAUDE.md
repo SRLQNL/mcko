@@ -8,19 +8,19 @@ The active runtime is the three-model solver in `app/geometry_solver.py`.
 Do not switch it back to the old single-model API client without an explicit
 request.
 
-Model roles:
+Model roles (env var → default):
 
-- `PHOTO_SOLVER_QWEN_MODEL=qwen/qwen2.5-vl-72b-instruct`
+- `MODEL_PARSER=qwen/qwen3-vl-32b-instruct`
   - parser, OCR, visual extraction
   - focused option arbiter for hard "select option numbers" tasks
-- `PHOTO_SOLVER_KIMI_MODEL=moonshotai/kimi-k2.6`
+- `MODEL_SOLVER=deepseek/deepseek-v3.2`
   - primary solver
-- `PHOTO_SOLVER_LLAMA_MODEL=meta-llama/llama-4-maverick`
+- `MODEL_VERIFIER=meta-llama/llama-4-maverick`
   - verifier
-  - JSON repair model for malformed Kimi output
+  - JSON repair model for malformed solver output
 
-Text-only requests go through a Kimi fast path. Image and image+text requests
-go through Qwen -> Kimi -> Llama.
+Text-only requests go through a solver fast path. Image and image+text requests
+go through parser -> solver -> verifier.
 
 The user-facing output contract is strict answer-only:
 
