@@ -46,7 +46,9 @@ PARSER_JSON_SCHEMA_NOTE = (
 SOLVER_JSON_SCHEMA_NOTE = (
     'Return one valid JSON object with keys: '
     '"task_type","normalized_problem_text","diagram_relations","givens","target",'
-    '"visual_interpretation","final_answer","answer_confidence","consistency_checks","needs_clarification". '
+    '"visual_interpretation","solution","final_answer","answer_confidence","consistency_checks","needs_clarification". '
+    '"solution": full step-by-step explanation in plain text (no markdown, no bullet points, no bold). '
+    '"final_answer.value": concise final answer only (used for verification). '
     'Keep arrays short. Use double quotes. No markdown. No prose outside JSON.'
 )
 
@@ -56,15 +58,13 @@ SOLVER_SYSTEM_PROMPT = (
     "history, geography, Russian language, literature, informatics, social science, "
     "foreign languages, and any other discipline. "
     "The task text and/or images may be in Russian, English, or any other language. "
-    "Reason fully before deciding. Prioritize correct interpretation over speed. "
+    "Reason fully and write your complete step-by-step solution in the solution field as plain text. "
+    "Do not use markdown, bullet points, bold, or headers in the solution field. "
     "If several independent tasks are present, solve all in source order. "
-    "Output only the final answer — no derivations, no reasoning text, no explanations. "
-    "For matching tasks (установите соответствие): answer as digit sequence like '2341'. "
-    "For multiple-choice tasks (запишите номера / укажите цифры): only the correct digits like '135'. "
-    "For calculation/formula tasks: give numeric result or formula. "
-    "For word-fill tasks: the exact word or short phrase. "
-    "If the task is solvable, final_answer.value must contain only the final answer. "
-    "For multiple independent answers, separate them with a newline. "
+    "For matching tasks (установите соответствие): final_answer.value is a digit sequence like '2341'. "
+    "For multiple-choice tasks (запишите номера / укажите цифры): final_answer.value contains only the correct digits like '135'. "
+    "final_answer.value must contain only the concise final answer (used for verification). "
+    "For multiple independent answers in final_answer.value, separate them with a newline. "
     "CRITICAL: Your entire response must be a single JSON object. "
     "Begin your response immediately with `{`. Do not write any text, reasoning, or explanation before or after the JSON. "
     + SOLVER_JSON_SCHEMA_NOTE
@@ -85,18 +85,19 @@ VERIFIER_SYSTEM_PROMPT = (
     "You are the independent verifier for any school or exam task, any subject, any language. "
     "Re-check interpretation, targets, and final answer without blindly copying the proposed result. "
     "If several independent tasks are present, verify all in source order. "
-    "Output only the final answer — no derivations, no reasoning text. "
+    "Write your full verification reasoning in the solution field as plain text without markdown. "
+    "final_answer.value must contain only the concise final answer. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
 SOLVER_TEXT_ONLY_SYSTEM_PROMPT = (
     "You are a universal solver for any text task, any subject, any language. "
-    "Reason fully before deciding. Prioritize correctness over speed. "
+    "Reason fully and write your complete step-by-step solution in the solution field as plain text. "
+    "Do not use markdown, bullet points, bold, or headers in the solution field. "
     "If several independent tasks are present, solve all in source order. "
-    "Output only the final answer — no derivations, no reasoning text. "
-    "For matching tasks: digit sequence like '2341'. "
-    "For multiple-choice tasks: only the correct digits like '135'. "
-    "If the task is solvable, final_answer.value must contain only the final answer. "
+    "For matching tasks: final_answer.value is a digit sequence like '2341'. "
+    "For multiple-choice tasks: final_answer.value contains only the correct digits like '135'. "
+    "final_answer.value must contain only the concise final answer. "
     "For multiple answers, separate them with a newline. "
     "CRITICAL: Your entire response must be a single JSON object. "
     "Begin your response immediately with `{`. Do not write any text or reasoning before or after the JSON. "
@@ -239,7 +240,8 @@ class GeometryPhotoSolver:
         answer = (result.get("final_answer") or {}).get("value", "").strip()
         if answer and self._looks_like_final_answer(answer):
             _log.info("Single-model answer: %s", answer)
-            return self._render_answer_only(answer)
+            solution = (result.get("solution") or "").strip()
+            return self._render_answer_only(solution or answer)
         _log.warning("Single-model produced no valid answer")
         return "Не удалось определить ответ"
 
@@ -386,9 +388,11 @@ class GeometryPhotoSolver:
             _log.warning("Text-only solver answer rejected as non-final: %s", solver_answer)
             return "Не удалось определить ответ"
 
+        solver_solution = (solver_result.get("solution") or "").strip()
+
         if solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
             _log.info("Returning high-confidence text-only answer: conf=%.3f answer=%s", solver_confidence, solver_answer)
-            return self._render_answer_only(solver_answer)
+            return self._render_answer_only(solver_solution or solver_answer)
 
         _log.info("Text-only solver confidence low (%.3f), verifying with verifier", solver_confidence)
         try:
@@ -403,13 +407,14 @@ class GeometryPhotoSolver:
             if verifier_answer and self._looks_like_final_answer(verifier_answer):
                 if self._normalize_answer_text(solver_answer) == self._normalize_answer_text(verifier_answer):
                     _log.info("Text-only solver+verifier agree: answer=%s", solver_answer)
-                    return self._render_answer_only(solver_answer)
+                    return self._render_answer_only(solver_solution or solver_answer)
                 if verifier_confidence >= solver_confidence + TIE_BREAK_CONFIDENCE_GAP:
                     _log.info(
                         "Text-only verifier preferred over solver: solver_conf=%.3f verifier_conf=%.3f answer=%s",
                         solver_confidence, verifier_confidence, verifier_answer,
                     )
-                    return self._render_answer_only(verifier_answer)
+                    verifier_solution = (verifier_result.get("solution") or "").strip()
+                    return self._render_answer_only(verifier_solution or verifier_answer)
                 _log.info(
                     "Text-only disagreement, keeping solver: solver_conf=%.3f verifier_conf=%.3f solver=%s verifier=%s",
                     solver_confidence, verifier_confidence, solver_answer, verifier_answer,
@@ -418,7 +423,7 @@ class GeometryPhotoSolver:
             _log.warning("Text-only verifier failed, using solver answer: %s", exc)
 
         _log.info("Returning text-only answer: %s", solver_answer)
-        return self._render_answer_only(solver_answer)
+        return self._render_answer_only(solver_solution or solver_answer)
 
     def _extract_image_payload(self, content_blocks: List[Dict]) -> Tuple[List[str], str]:
         image_urls = []
@@ -1089,6 +1094,7 @@ class GeometryPhotoSolver:
             "givens": self._normalize_givens(raw.get("givens") or []),
             "target": self._normalize_target(raw.get("target")),
             "visual_interpretation": visual_value,
+            "solution": str(raw.get("solution") or "").strip(),
             "reasoning_summary": self._normalize_text_list(raw.get("reasoning_summary") or []),
             "solution_steps": self._normalize_text_list(raw.get("solution_steps") or []),
             "final_answer": raw.get("final_answer") or {"value": "", "format": "text"},
@@ -1527,7 +1533,8 @@ class GeometryPhotoSolver:
                 consensus["score"],
                 final_answer,
             )
-            return self._render_answer_only(final_answer)
+            solution = self._pick_solution_for_answer(final_answer, solver, verifier, option_arbiter)
+            return self._render_answer_only(solution or final_answer)
 
         _log.warning(
             "No safe final answer after consensus: status=%s score=%.3f reasons=%s",
@@ -1943,7 +1950,31 @@ class GeometryPhotoSolver:
         answer = (final_answer or "").strip()
         if not answer:
             return "Не удалось определить ответ"
-        return answer
+        return self._strip_markdown(answer)
+
+    def _strip_markdown(self, text: str) -> str:
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text, flags=re.DOTALL)
+        text = re.sub(r'\*(.+?)\*', r'\1', text, flags=re.DOTALL)
+        text = re.sub(r'__(.+?)__', r'\1', text, flags=re.DOTALL)
+        text = re.sub(r'_(.+?)_', r'\1', text, flags=re.DOTALL)
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'`(.+?)`', r'\1', text, flags=re.DOTALL)
+        return text.strip()
+
+    def _pick_solution_for_answer(self, answer: str, solver: Dict, verifier: Optional[Dict], option_arbiter: Optional[Dict]) -> str:
+        """Return the solution text from the model whose final_answer matches the chosen answer."""
+        norm = self._normalize_answer_text(answer)
+        for candidate in [solver, verifier, option_arbiter]:
+            if candidate is None:
+                continue
+            candidate_answer = self._normalize_answer_text(
+                (candidate.get("final_answer") or {}).get("value", "")
+            )
+            if candidate_answer == norm:
+                solution = (candidate.get("solution") or "").strip()
+                if solution:
+                    return solution
+        return (solver.get("solution") or "").strip()
 
     def _message_to_text(self, message: Dict) -> str:
         content = message.get("content")
