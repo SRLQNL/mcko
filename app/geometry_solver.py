@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 REQUEST_TIMEOUT = (20, 120)
 PARSER_MAX_TOKENS = 2500
-SOLVER_MAX_TOKENS = 1500
+SOLVER_MAX_TOKENS = 3000
 VERIFIER_MAX_TOKENS = 1000
 TEXT_ONLY_MAX_TOKENS = 1200
 REPAIR_MAX_TOKENS = 2000
@@ -65,6 +65,8 @@ SOLVER_SYSTEM_PROMPT = (
     "For word-fill tasks: the exact word or short phrase. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
     "For multiple independent answers, use: '1) ...\\n2) ...'. "
+    "CRITICAL: Your entire response must be a single JSON object. "
+    "Begin your response immediately with `{`. Do not write any text, reasoning, or explanation before or after the JSON. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -96,6 +98,8 @@ SOLVER_TEXT_ONLY_SYSTEM_PROMPT = (
     "For multiple-choice tasks: only the correct digits like '135'. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
     "For multiple answers, use: '1) ...\\n2) ...'. "
+    "CRITICAL: Your entire response must be a single JSON object. "
+    "Begin your response immediately with `{`. Do not write any text or reasoning before or after the JSON. "
     + SOLVER_JSON_SCHEMA_NOTE
 )
 
@@ -973,9 +977,14 @@ class GeometryPhotoSolver:
         }
 
     def _should_prefer_remote_repair(self, raw_text: str) -> bool:
-        text = raw_text or ""
-        if not text.strip():
+        text = (raw_text or "").strip()
+        if not text:
             return False
+        # Pure prose output (model reasoning leaking into response body, e.g. DeepSeek V4 Flash thinking mode).
+        # Detected when the response is long, starts with a word character (not "{"), and has no JSON structure.
+        # Local salvage on prose reliably extracts wrong fragments; prefer remote repair.
+        if len(text) > 300 and not text.startswith("{") and "{" not in text[:200]:
+            return True
         if re.search(r"(?im)^\s*(?:final[_\s-]*answer|answer|итог(?:овый)?\s*ответ|ответ)\s*[:=-]", text):
             return False
         numbered_lines = re.findall(r"(?im)^\s*\d+\)\s+\S", text)
@@ -1878,6 +1887,9 @@ class GeometryPhotoSolver:
         text = (answer or "").strip()
         if not text:
             return False
+        # Reject raw JSON objects/arrays — these are structured model outputs, not user-facing answers
+        if text.startswith("{") or text.startswith("["):
+            return False
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if any(re.match(r"^\d+\)\s*", line) for line in lines):
             normalized_lines = [re.sub(r"^\d+\)\s*", "", line).strip() for line in lines]
@@ -1914,6 +1926,8 @@ class GeometryPhotoSolver:
             return False
         verifier_answer = ((verifier or {}).get("final_answer") or {}).get("value", "").strip()
         if not verifier_answer:
+            return False
+        if not self._looks_like_final_answer(verifier_answer):
             return False
         if self._coerce_confidence((verifier or {}).get("answer_confidence")) < 0.75:
             return False
