@@ -16,9 +16,7 @@ DEFAULTS = {
     "HOTKEY_SHOW": "<ctrl>+<shift>+<space>",
     "HOTKEY_CLIPBOARD": "<ctrl>+<alt>+<space>",
     "HOTKEY_SCREENSHOT": "<ctrl>+<shift>+s",
-    "MODEL_SOLVER": "deepseek/deepseek-v3.2",
-    "MODEL_PARSER": "qwen/qwen3-vl-32b-instruct",
-    "MODEL_VERIFIER": "meta-llama/llama-4-maverick",
+    "MODEL": "",
 }
 
 
@@ -29,9 +27,7 @@ class Config:
         self.hotkey_show: str = ""
         self.hotkey_clipboard: str = ""
         self.hotkey_screenshot: str = ""
-        self.model_solver: str = ""
-        self.model_parser: str = ""
-        self.model_verifier: str = ""
+        self.model: str = ""
 
     def load(self) -> None:
         logger.info("Loading configuration from .env")
@@ -64,19 +60,18 @@ class Config:
         self.hotkey_show = self._env_or_default("HOTKEY_SHOW")
         self.hotkey_clipboard = self._env_or_default("HOTKEY_CLIPBOARD")
         self.hotkey_screenshot = self._env_or_default("HOTKEY_SCREENSHOT")
-        self.model_solver = self._env_or_default("MODEL_SOLVER")
-        self.model_parser = self._env_or_default("MODEL_PARSER")
-        self.model_verifier = self._env_or_default("MODEL_VERIFIER")
+        self.model = self._env_or_default("MODEL")
+
+        if not self.model:
+            logger.warning("MODEL is not set in .env — solver will fail until configured")
 
         logger.info(
-            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, solver=%s, parser=%s, verifier=%s",
+            "Config loaded: hotkey_window=%s, hotkey_show=%s, hotkey_clipboard=%s, hotkey_screenshot=%s, model=%s",
             self.hotkey_window,
             self.hotkey_show,
             self.hotkey_clipboard,
             self.hotkey_screenshot,
-            self.model_solver,
-            self.model_parser,
-            self.model_verifier,
+            self.model or "<unset>",
         )
 
     def _normalize_secret(self, value: str) -> str:

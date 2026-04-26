@@ -25,16 +25,13 @@ class ChatWindow:
     Ресайз — через кастомный grip в правом нижнем углу.
     """
 
-    def __init__(self, root: tk.Tk, on_send_callback, on_mode_change=None):
+    def __init__(self, root: tk.Tk, on_send_callback):
         self._root = root
         self._on_send = on_send_callback
-        self._on_mode_change = on_mode_change
         self._visible = False
         self._window: tk.Toplevel = None
         self._chat_view = None
         self._input_field = None
-        self._multi_model = True
-        self._mode_label = None
 
         # Drag state
         self._drag_x = 0
@@ -49,10 +46,6 @@ class ChatWindow:
 
         self._build()
         _log.info("ChatWindow created (hidden)")
-
-    @property
-    def multi_model(self) -> bool:
-        return self._multi_model
 
     # ─── Build ───────────────────────────────────────────────────────────────
 
@@ -116,23 +109,6 @@ class ChatWindow:
         restart_btn.bind("<Button-1>", lambda e: self._on_restart_click())
         restart_btn.bind("<Enter>", lambda e: restart_btn.configure(fg="#9eaab3"))
         restart_btn.bind("<Leave>", lambda e: restart_btn.configure(fg=CLOSE_BTN_FG))
-
-        # Mode toggle: "3М" = three-model ensemble, "1М" = single fast model
-        mode_btn = tk.Label(
-            titlebar,
-            text=" 3М ",
-            bg=TITLEBAR_BG,
-            fg="#6aacac",
-            font=("Courier", 7, "bold"),
-            cursor="hand2",
-        )
-        mode_btn.pack(side=tk.RIGHT, fill=tk.Y)
-        mode_btn.bind("<Button-1>", lambda e: self._toggle_mode())
-        mode_btn.bind("<Enter>", lambda e: mode_btn.configure(fg="#4d9999"))
-        mode_btn.bind("<Leave>", lambda e: mode_btn.configure(
-            fg="#6aacac" if self._multi_model else "#ac8c6a"
-        ))
-        self._mode_label = mode_btn
 
         # Drag bindings on titlebar
         for widget in (titlebar, drag_pad):
@@ -285,18 +261,6 @@ class ChatWindow:
             # тега image_label, и _on_key будет блокировать весь ввод через "break"
             self._window.after(250, self._move_cursor_to_end)
             _log.info("InputField focus scheduled")
-
-    def _toggle_mode(self) -> None:
-        """Toggle between 3-model ensemble and single-model fast path."""
-        self._multi_model = not self._multi_model
-        if self._mode_label:
-            if self._multi_model:
-                self._mode_label.configure(text=" 3М ", fg="#6aacac")
-            else:
-                self._mode_label.configure(text=" 1М ", fg="#ac8c6a")
-        _log.info("Solver mode toggled: multi_model=%s", self._multi_model)
-        if self._on_mode_change:
-            self._on_mode_change(self._multi_model)
 
     def _on_restart_click(self) -> None:
         """Запускает перезапуск приложения через kill.sh → run.sh."""

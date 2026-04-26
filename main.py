@@ -28,9 +28,7 @@ def main():
     # ── Core components ─────────────────────────────────────────────────────
     geometry_solver = GeometryPhotoSolver(
         config.api_key,
-        solver_model=config.model_solver,
-        parser_model=config.model_parser,
-        verifier_model=config.model_verifier,
+        model=config.model,
     )
     session = Session()
     logger.info("Core components initialized")
@@ -51,7 +49,6 @@ def main():
     pending_window_toggle = {"job": None}
     screenshot_hotkey_state = {"last_trigger_at": 0.0}
     screenshot_hotkey_suppress_seconds = 1.0
-    solver_mode = {"multi_model": True}
 
     def _should_suppress_window_hotkey() -> bool:
         elapsed = time.monotonic() - screenshot_hotkey_state["last_trigger_at"]
@@ -94,9 +91,7 @@ def main():
             full_text = ""
             had_stream_error = False
             try:
-                result = geometry_solver.solve_content_blocks(
-                    content_blocks, multi_model=solver_mode["multi_model"]
-                )
+                result = geometry_solver.solve_content_blocks(content_blocks)
                 if isinstance(result, str):
                     root.after(0, lambda t=result: chat_window.chat_view.append_assistant_chunk(t))
                     if result.startswith("[Ошибка ") or result.startswith("\n[Ошибка "):
@@ -140,7 +135,6 @@ def main():
     chat_window = ChatWindow(
         root,
         on_send_callback=on_send,
-        on_mode_change=lambda v: solver_mode.update({"multi_model": v}),
     )
     logger.info("ChatWindow created")
 

@@ -1,29 +1,28 @@
 # Repository Guidelines
 
 ## Current State
-`main` is the active branch. The runtime is the three-model solver in
-`app/geometry_solver.py`. The old single-model `APIClient` runtime is removed.
+`main` is the active branch. The runtime is the **lite** single-model solver
+in `app/geometry_solver.py`. Previous three-model parser/solver/verifier
+runtime is removed.
 
 The app is a small X11/Tkinter desktop tool for solving tasks from text,
 screenshots, clipboard images, and pasted images through OpenRouter.
 
-Active model roles (env var → default):
+A single env var controls the model:
 
-- `MODEL_PARSER=qwen/qwen3-vl-32b-instruct` — parser, OCR, visual extraction,
-  and option arbiter for hard multiple-choice image tasks.
-- `MODEL_SOLVER=deepseek/deepseek-v4-flash` — primary text solver. Receives
-  parser OCR extract only; does NOT receive images (text-only model).
-- `MODEL_VERIFIER=meta-llama/llama-4-maverick` — independent verifier and JSON
-  repair model. Receives images and OCR; solves independently of solver.
+- `MODEL` — any OpenRouter model id (the user sets this in `.env`). Default
+  is empty; the solver returns a fallback message until configured.
 
-Do not reintroduce `OPENROUTER_MODEL`, `OPENROUTER_MODELS`, `SYSTEM_PROMPT_1`,
-or `SYSTEM_PROMPT_2` as active runtime dependencies without an explicit migration.
+Do not reintroduce `MODEL_SOLVER`, `MODEL_PARSER`, `MODEL_VERIFIER`,
+`OPENROUTER_MODEL`, `OPENROUTER_MODELS`, `SYSTEM_PROMPT_1`, or
+`SYSTEM_PROMPT_2` as active runtime dependencies without an explicit
+migration.
 
 ## Project Structure
 Use the repository root for commands.
 
 - `main.py` - application entrypoint, Tk root, hotkey callbacks, UI wiring.
-- `app/geometry_solver.py` - active solver pipeline and OpenRouter calls.
+- `app/geometry_solver.py` - lite single-model solver and OpenRouter call.
 - `app/config.py` - `.env` loading and base64 API-key decoding.
 - `app/scenario2.py` - background clipboard flow.
 - `app/hotkeys.py` - global X11 hotkeys via `pynput`.
@@ -31,8 +30,8 @@ Use the repository root for commands.
 - `app/screenshot.py` - screenshot capture flow.
 - `app/session.py` - in-memory chat history.
 - `ui/` - Tkinter window, input, chat view, image labels.
-- `tests/test_geometry_solver.py` - unit/regression tests for solver selection and payload normalization.
-- `tests/run_solver_fixture_suite.py` - live model fixture runner. It creates screenshot-like image fixtures and sends image-only blocks to `GeometryPhotoSolver`.
+- `tests/test_geometry_solver.py` - unit tests for the lite solver.
+- `tests/run_solver_fixture_suite.py` - live model fixture runner.
 
 Operational scripts:
 
@@ -41,57 +40,23 @@ Operational scripts:
 - `python3 main.py` - direct local run when dependencies are installed.
 
 ## Runtime Contract
-All user-facing answers must be answer-only, usually:
+All user-facing answers are plain text. Whatever the model returns is
+post-processed to strip residual markdown markers (`**`, `*`, `_`, `__`,
+`` ` ``, `~~`, headers, blockquotes, code fences).
 
-```text
-1) 69
-```
-
-For multiple independent tasks:
-
-```text
-1) ...
-2) ...
-```
-
-Internal reasoning can be full, but it must not be displayed in the UI or
-clipboard result.
-
-Text-only requests use the solver fast path. Image or image+text requests use
-the three-model pipeline:
-
-1. `Parser` (Qwen) OCRs and extracts task structure from source images.
-2. `Solver` (DeepSeek) solves from parser OCR extract (text only, no images).
-3. `Verifier` (Llama) solves independently from parser OCR plus source images.
-   EMS: skipped if solver confidence ≥ 0.95 on non-option tasks.
-4. The consensus stage compares answers, confidence, parser ambiguity, repair
-   source, and verifier independence.
-5. For hard option-selection tasks, parser may run a focused option arbiter pass.
+The system prompt is intentionally minimal: it tells the model to reply in
+plain text without markdown formatting (in both English and Russian). There
+is no JSON schema, no role description, no examples.
 
 All API requests include:
 - `"provider": {"allow_fallbacks": True, "data_collection": "allow", "sort": "throughput"}`
 - `"plugins": [{"id": "response-healing"}]`
 
-Do not add hardcoded task answers or formula-specific exact solvers.
+Retries on 408/429/500/502/503/504 with exponential backoff. Any other
+failure returns `Не удалось определить ответ`.
 
-## Important Solver Risks
-The biggest live failure modes seen so far:
-
-- OpenRouter/Parser `429` upstream rate limits.
-- Solver returning prose or malformed JSON instead of strict JSON.
-- Local answer salvage extracting a numbered option explanation instead of the final answer.
-- Verifier confidently verifying a wrong option subset such as `14` instead of `124`.
-- Low-confidence or missing parser output causing `1) Не удалось определить ответ`.
-
-Current mitigations:
-
-- Recoverable provider errors degrade instead of crashing the worker thread.
-- Response healing plugin reduces server-side JSON defects 80-99.8%.
-- JSON repair for solver uses verifier model as formatter, not the solver itself.
-- Option-style prose prefers remote JSON repair before local salvage.
-- Parser option arbiter is limited to detected "select/write option numbers" tasks with model disagreement.
-- `"sort": "throughput"` reduces timeout and rate-limit errors.
-- Top-level solver errors return `1) Не удалось определить ответ` instead of raw exceptions.
+Do not add hardcoded task answers, formula-specific exact solvers, or
+multi-model consensus logic.
 
 ## Python and Style
 Target Python 3.8 on Linux/RosaOS.
@@ -113,6 +78,7 @@ Configuration lives in `.env` (tracked in git).
 
 - `.env` may contain a local test key encoded in base64.
 - Release branches must sanitize `.env` so `OPENROUTER_API_KEY=` is empty.
+- `MODEL` may be left empty in releases — the user fills it in.
 - There is no `.env.example`. Users on a clean clone insert their key directly.
 - `app/config.py` auto-decodes base64 `OPENROUTER_API_KEY` values.
 
@@ -130,9 +96,8 @@ Live solver regression suite:
 python3 tests/run_solver_fixture_suite.py user-regression
 ```
 
-That suite requires network and a valid OpenRouter key. It sends image-only
-blocks to the same `GeometryPhotoSolver` path used by GUI/clipboard flows, but
-it is still not a full X11 GUI test.
+That suite requires network, a valid OpenRouter key, and a configured
+`MODEL` value in `.env`.
 
 Manual target checks after UI changes:
 
@@ -143,14 +108,14 @@ Manual target checks after UI changes:
 - screenshot insertion
 - clipboard image/text flow
 - paste multiple images
-- answer-only output
+- plain-text output
 
 ## Git
 Commit messages should be short, imperative, and specific, for example:
 
-- `Implement research findings: response healing, EMS, V4 Flash`
-- `Rename model roles: kimi/qwen/llama → solver/parser/verifier`
-- `Fix solver 404: remove images from text-only model request`
+- `Convert runtime to lite single-model solver`
+- `Replace MODEL_SOLVER/PARSER/VERIFIER with single MODEL env var`
+- `Strip remaining markdown markers from model output`
 
 Do not amend commits unless explicitly requested. Do not use destructive git
 commands unless explicitly requested.
