@@ -114,7 +114,7 @@ def main():
             except Exception as exc:
                 had_stream_error = True
                 logger.error("Response worker failed: %s", exc, exc_info=True)
-                error_text = "1) Не удалось определить ответ"
+                error_text = "Не удалось определить ответ"
                 root.after(0, lambda t=error_text: chat_window.chat_view.append_assistant_chunk(t))
             finally:
                 root.after(0, chat_window.chat_view.end_assistant)

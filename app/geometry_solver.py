@@ -64,7 +64,7 @@ SOLVER_SYSTEM_PROMPT = (
     "For calculation/formula tasks: give numeric result or formula. "
     "For word-fill tasks: the exact word or short phrase. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
-    "For multiple independent answers, use: '1) ...\\n2) ...'. "
+    "For multiple independent answers, separate them with a newline. "
     "CRITICAL: Your entire response must be a single JSON object. "
     "Begin your response immediately with `{`. Do not write any text, reasoning, or explanation before or after the JSON. "
     + SOLVER_JSON_SCHEMA_NOTE
@@ -97,7 +97,7 @@ SOLVER_TEXT_ONLY_SYSTEM_PROMPT = (
     "For matching tasks: digit sequence like '2341'. "
     "For multiple-choice tasks: only the correct digits like '135'. "
     "If the task is solvable, final_answer.value must contain only the final answer. "
-    "For multiple answers, use: '1) ...\\n2) ...'. "
+    "For multiple answers, separate them with a newline. "
     "CRITICAL: Your entire response must be a single JSON object. "
     "Begin your response immediately with `{`. Do not write any text or reasoning before or after the JSON. "
     + SOLVER_JSON_SCHEMA_NOTE
@@ -132,7 +132,7 @@ class GeometryPhotoSolver:
     def solve_content_blocks(self, content_blocks: List[Dict], multi_model: bool = True) -> str:
         image_urls, user_text = self._extract_image_payload(content_blocks)
         if not image_urls and not user_text.strip():
-            return "1) Не удалось определить ответ"
+            return "Не удалось определить ответ"
 
         started_at = time.monotonic()
         _log.info("Waiting for solver slot: has_images=%s multi_model=%s", bool(image_urls), multi_model)
@@ -201,10 +201,10 @@ class GeometryPhotoSolver:
                 return self._format_user_result(consensus, solver_result, parser_result, verifier_result, option_arbiter_result)
             except RecoverableProviderError as exc:
                 _log.warning("Recoverable provider failure at top-level solve path: %s", exc)
-                return "1) Не удалось определить ответ"
+                return "Не удалось определить ответ"
             except Exception as exc:
                 _log.error("Unexpected solver failure at top-level solve path: %s", exc, exc_info=True)
-                return "1) Не удалось определить ответ"
+                return "Не удалось определить ответ"
             finally:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 _log.info("Solve pipeline finished: multi_model=%s elapsed_ms=%d", multi_model, elapsed_ms)
@@ -227,21 +227,21 @@ class GeometryPhotoSolver:
                 result = self._normalize_result(raw, role="solver")
             except RecoverableProviderError as exc:
                 _log.warning("Single-model image solve failed: %s", exc)
-                return "1) Не удалось определить ответ"
+                return "Не удалось определить ответ"
         else:
             _log.info("Single-model mode: solver direct solve (text)")
             try:
                 result = self._call_solver_text_only(user_text)
             except RecoverableProviderError as exc:
                 _log.warning("Single-model text solve failed: %s", exc)
-                return "1) Не удалось определить ответ"
+                return "Не удалось определить ответ"
 
         answer = (result.get("final_answer") or {}).get("value", "").strip()
         if answer and self._looks_like_final_answer(answer):
             _log.info("Single-model answer: %s", answer)
             return self._render_answer_only(answer)
         _log.warning("Single-model produced no valid answer")
-        return "1) Не удалось определить ответ"
+        return "Не удалось определить ответ"
 
     def _build_single_model_content(self, variants: List[Dict], user_text: str) -> List[Dict]:
         prompt = (
@@ -373,18 +373,18 @@ class GeometryPhotoSolver:
             solver_result = self._call_solver_text_only(user_text)
         except RecoverableProviderError as exc:
             _log.warning("Text-only fast path failed: %s", exc)
-            return "1) Не удалось определить ответ"
+            return "Не удалось определить ответ"
 
         solver_answer = (solver_result.get("final_answer") or {}).get("value", "").strip()
         solver_confidence = self._coerce_confidence(solver_result.get("answer_confidence"))
 
         if not solver_answer:
             _log.warning("Text-only fast path produced no answer")
-            return "1) Не удалось определить ответ"
+            return "Не удалось определить ответ"
 
         if not self._looks_like_final_answer(solver_answer):
             _log.warning("Text-only solver answer rejected as non-final: %s", solver_answer)
-            return "1) Не удалось определить ответ"
+            return "Не удалось определить ответ"
 
         if solver_confidence >= DIRECT_SOLVER_CONFIDENCE_THRESHOLD:
             _log.info("Returning high-confidence text-only answer: conf=%.3f answer=%s", solver_confidence, solver_answer)
@@ -1535,7 +1535,7 @@ class GeometryPhotoSolver:
             consensus["score"],
             ", ".join(consensus.get("reasons") or []) or "-",
         )
-        return "1) Не удалось определить ответ"
+        return "Не удалось определить ответ"
 
     def _pick_user_answer(self, consensus: Dict, solver: Dict, parser: Dict, verifier: Optional[Dict], option_arbiter: Optional[Dict] = None) -> str:
         solver_answer = (solver.get("final_answer") or {}).get("value", "").strip()
@@ -1942,13 +1942,8 @@ class GeometryPhotoSolver:
     def _render_answer_only(self, final_answer: str) -> str:
         answer = (final_answer or "").strip()
         if not answer:
-            return "1) Не удалось определить ответ"
-        if re.match(r"^\d+\)\s*", answer):
-            return answer
-        lines = [line.strip() for line in answer.splitlines() if line.strip()]
-        if len(lines) > 1:
-            return "\n".join(["%d) %s" % (index, line) for index, line in enumerate(lines, start=1)])
-        return "1) %s" % answer
+            return "Не удалось определить ответ"
+        return answer
 
     def _message_to_text(self, message: Dict) -> str:
         content = message.get("content")
